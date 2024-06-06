@@ -1,0 +1,735 @@
+---
+title: "Objective 1"
+format: html
+author: "Dewi"
+---
+
+# Load Library
+
+```{r warning=FALSE}
+# Data Input and Cleaning
+library(readxl) 
+library(openxlsx) 
+
+library(ggmice) 
+
+# Data Visualization
+library(ggplot2)
+
+# Clustering
+library(mclust)  # Model-based clustering (Gaussian Mixture Models)
+library(cluster) # General framework for various clustering algorithms
+
+# Exploratory Data Analysis (EDA)
+library(factoextra) # Perform EDA tasks (PCA, MCA, visualize categorical data)
+
+# Additional Clustering Functions
+library(fclust)  # Find optimal number of clusters, evaluate cluster validity, etc.
+
+# Fuzzy c-means
+library(e1071)
+
+# Hierarchical Clustering Visualization
+library(dendextend) # Enhance hierarchical clustering dendrogram visualizations
+
+
+# Summarizing data
+library(dplyr)
+```
+
+# Read and split data
+
+```{r warning=FALSE}
+data <- suppressMessages(read_xlsx(path = "data_master_project_3years.xlsx"))
+
+# Split female and male into separate groups
+male_data <- data[data$Sex == "Male",]
+female_data <- data[data$Sex == "Female",]
+```
+
+# Data pre-processing
+
+-   Calculating
+-   Removing outliers (beyond 5 standard deviation)
+-   Log transformation
+-   Scaling
+
+```{r}
+preprocess_log_scale <- function(df) {
+  # Replace spaces in column names with underscores
+  colnames(df) <- gsub(" ", "_", colnames(df))
+  
+  # Check original column names
+  #print("Original column names:")
+  #print(colnames(df))
+  
+  # Convert the date column to Date type if it exists
+  date_col_name <- "Date_E11_first_reported_(non-insulin-dependent_diabetes_mellitus)"
+  if (date_col_name %in% colnames(df)) {
+    print("Date column found. Converting to Date class...")
+    df[[date_col_name]] <- as.Date(df[[date_col_name]])
+  } else {
+    stop("Date column not found in the data frame")
+  }
+  
+  # Select clustering variables, dynamically include the identified date column
+  subset_data <- df[, c(1, which(colnames(df) == "Month_of_birth"), 
+                        which(colnames(df) == "Year_of_birth"), 
+                        which(colnames(df) == date_col_name),
+                        67, 7, 222, 234, 238, 256, 218)]
+  
+  # Rename columns for easier reference
+  colnames(subset_data) <- c("ID", "Month_of_birth", "Year_of_birth", "Date_diagnosed", "BMI", "HbA1c", "Cholesterol", "HDL", "LDL", "Triglycerides", "CRP")
+  
+  # Check renamed column names
+  print("Renamed column names:")
+  print(colnames(subset_data))
+  
+  # Ensure month names are capitalized properly for matching
+  subset_data$Month_of_birth <- tools::toTitleCase(tolower(subset_data$Month_of_birth))
+  
+  # Convert month and year of birth to numeric
+  month_mapping <- c("January"=1, "February"=2, "March"=3, "April"=4, "May"=5, "June"=6,
+                     "July"=7, "August"=8, "September"=9, "October"=10, "November"=11, "December"=12)
+  subset_data$Month_of_birth <- as.numeric(month_mapping[subset_data$Month_of_birth])
+  subset_data$Year_of_birth <- as.numeric(subset_data$Year_of_birth)
+  
+  # Calculate age at diagnosis
+  diagnosis_year <- as.numeric(format(subset_data$Date_diagnosed, "%Y"))
+  diagnosis_month <- as.numeric(format(subset_data$Date_diagnosed, "%m"))
+  subset_data$age_at_diagnosis <- diagnosis_year - subset_data$Year_of_birth - 
+                                  ifelse(diagnosis_month < subset_data$Month_of_birth, 1, 0)
+  
+  # Create numeric variables
+  subset_data[, 5:12] <- apply(subset_data[, 5:12], 2, as.numeric)
+  
+  # Add Insulin resistance value
+  subset <- data.frame(subset_data)
+  subset$IR <- subset[, 10] / subset[, 8]
+  subset <- subset[, -10]
+  
+  subset2 <- subset[complete.cases(subset), ]
+  
+  # Remove outliers
+  for (col_name in colnames(subset2[, 5:12])) {
+    col <- subset2[, col_name]
+    mean_val <- mean(col)
+    std_dev <- sd(col)
+    subset2 <- subset2[!((col > mean_val + 5 * std_dev) | (col < mean_val - 5 * std_dev)), ]
+  }
+  
+  subset2[,5:12] <- apply(subset2[,5:12], 2, log1p)
+  subset2[,5:12] <- apply(subset2[,5:12], 2, scale)
+
+
+  return(subset2)
+}
+
+female_processed <- preprocess_log_scale(female_data)
+male_processed <- preprocess_log_scale(male_data)
+```
+
+check if data is processed well
+
+```{r summary_processed}
+summary(female_processed)
+summary(male_processed)
+```
+
+-   Same function but without log transformation and scaling
+
+```{r}
+preprocess_outliers <- function(df) {
+  # Replace spaces in column names with underscores
+  colnames(df) <- gsub(" ", "_", colnames(df))
+  
+  # Check original column names
+  #print("Original column names:")
+  #print(colnames(df))
+  
+  # Convert the date column to Date type if it exists
+  date_col_name <- "Date_E11_first_reported_(non-insulin-dependent_diabetes_mellitus)"
+  if (date_col_name %in% colnames(df)) {
+    print("Date column found. Converting to Date class...")
+    df[[date_col_name]] <- as.Date(df[[date_col_name]])
+  } else {
+    stop("Date column not found in the data frame")
+  }
+  
+  # Select clustering variables, dynamically include the identified date column
+  subset_data <- df[, c(1, which(colnames(df) == "Month_of_birth"), 
+                        which(colnames(df) == "Year_of_birth"), 
+                        which(colnames(df) == date_col_name),
+                        67, 7, 222, 234, 238, 256, 218)]
+  
+  # Rename columns for easier reference
+  colnames(subset_data) <- c("ID", "Month_of_birth", "Year_of_birth", "Date_diagnosed", "BMI", "HbA1c", "Cholesterol", "HDL", "LDL", "Triglycerides", "CRP")
+  
+  # Check renamed column names
+  print("Renamed column names:")
+  print(colnames(subset_data))
+  
+  # Ensure month names are capitalized properly for matching
+  subset_data$Month_of_birth <- tools::toTitleCase(tolower(subset_data$Month_of_birth))
+  
+  # Convert month and year of birth to numeric
+  month_mapping <- c("January"=1, "February"=2, "March"=3, "April"=4, "May"=5, "June"=6,
+                     "July"=7, "August"=8, "September"=9, "October"=10, "November"=11, "December"=12)
+  subset_data$Month_of_birth <- as.numeric(month_mapping[subset_data$Month_of_birth])
+  subset_data$Year_of_birth <- as.numeric(subset_data$Year_of_birth)
+  
+  # Calculate age at diagnosis
+  diagnosis_year <- as.numeric(format(subset_data$Date_diagnosed, "%Y"))
+  diagnosis_month <- as.numeric(format(subset_data$Date_diagnosed, "%m"))
+  subset_data$age_at_diagnosis <- diagnosis_year - subset_data$Year_of_birth - 
+                                  ifelse(diagnosis_month < subset_data$Month_of_birth, 1, 0)
+  
+  # Create numeric variables
+  subset_data[, 5:12] <- apply(subset_data[, 5:12], 2, as.numeric)
+  
+  # Add Insulin resistance value
+  subset <- data.frame(subset_data)
+  subset$IR <- subset[, 10] / subset[, 8]
+  subset <- subset[, -10]
+  
+  subset2 <- subset[complete.cases(subset), ]
+  
+  # Remove outliers
+  for (col_name in colnames(subset2[, 5:12])) {
+    col <- subset2[, col_name]
+    mean_val <- mean(col)
+    std_dev <- sd(col)
+    subset2 <- subset2[!((col > mean_val + 5 * std_dev) | (col < mean_val - 5 * std_dev)), ]
+  }
+  
+
+  return(subset2)
+}
+
+female_processed_no_scale_log <- preprocess_outliers(female_data)
+male_processed_no_scale_log <- preprocess_outliers(male_data)
+```
+
+```{r hist}
+# Define the range of columns
+columns_range <- 5:12
+
+# Create a new plotting window
+par(mfrow=c(2, 4)) 
+
+# Loop through each column and plot histogram
+for (col_index in columns_range) {
+  # Get column name
+  col_name <- names(male_processed_no_scale_log)[col_index]
+  
+  # Plot histogram
+  hist(male_processed_no_scale_log[, col_index], main = paste("Histogram of Male", col_name), xlab = col_name, col = "skyblue")
+}
+
+# Create a new plotting window
+par(mfrow=c(2, 4)) 
+
+# Loop through each column and plot histogram
+for (col_index in columns_range) {
+  # Get column name
+  col_name <- names(male_processed)[col_index]
+  
+  # Plot histogram
+  hist(male_processed[, col_index], main = paste("Histogram of Male", col_name), xlab = col_name, col = "skyblue")
+}
+
+# Reset plotting layout
+par(mfrow=c(1, 1))
+```
+
+# Clustering
+
+## Optimal clustering number
+
+```{r}
+set.seed(123)
+```
+
+Cluster tendency with Hopkins statistics
+
+```{r eval=FALSE}
+# Compute Hopkins statistic 
+result_tendency_female <- get_clust_tendency(female_processed[, 5:12], n = nrow(female_processed)-1, graph = FALSE)
+result_tendency_female$hopkins_stat
+```
+
+A hopkins statistics of 0.77, indicate strong cluster tendency. The data likely has well-defined clusters.
+
+Finding optimal cluster number with Sum of Squares, Silhouette score and GAP-distance for females:
+
+```{r optimal_female}
+fviz_nbclust(female_processed[, 5:12], kmeans, method = "wss")
+fviz_nbclust(female_processed[, 5:12], kmeans, method = "silhouette")
+fviz_nbclust(female_processed[, 5:12], kmeans, method = "gap_stat", iter.max=50)
+```
+Finding optimal cluster number with Sum of Squares, Silhouette score and GAP-distance for males:
+```{r optimal_male}
+fviz_nbclust(male_processed[, 5:12], kmeans, method = "wss", iter.max=50)
+fviz_nbclust(male_processed[, 5:12], kmeans, method = "silhouette")
+fviz_nbclust(male_processed[, 5:12], kmeans, method = "gap_stat", iter.max=50)
+```
+
+3 clusters seems like the best amount for both female and male.
+
+We can perform a cluster stability test.
+```{r}
+library(fpc)
+
+# Perform cluster-wise stability evaluation using clusterboot
+cluster_stability <- clusterboot(data = female_processed[, 5:12], B=1000, clustermethod=kmeansCBI, k=3, count=FALSE )
+
+# AvgJaccard <0.6 is unstable & >0.85 is highly stable
+AvgJaccard <- cluster_stability$bootmean
+Instability <- cluster_stability$bootbrd/1000
+Clusters <- c(1:4)
+Eval <- cbind(Clusters, AvgJaccard, Instability)
+Eval 
+```
+This test gives a stable result for k-means with 3 clusters.
+
+To visualize the clusters in 2 dimensions, PCA can be performed. PCA reduces the 8 variables into 1 dimension. 
+
+PCA k-means clustering Female 4 clusters:
+
+```{r}
+fviz_cluster(kmeans(female_processed[,5:12], centers = 4, iter.max = 100, nstart = 100), data= female_processed[, 5:12])
+```
+
+PCA k-means clustering Female 3 clusters:
+
+```{r}
+fviz_cluster(kmeans(female_processed[,5:12], centers = 3, iter.max = 100, nstart = 100), data= female_processed[, 5:12])
+```
+
+-   Dim1 (Principal Component 1): This component captures the majority of the variance in your dataset, specifically 27.2%. It suggests that the patterns or structures present in your data are primarily aligned with this component. In other words, "dim1" summarizes most of the important information contained in your original dataset.
+-   Dim2 (Principal Component 2): This component explains a smaller proportion of the total variance, specifically 26.1%. While it captures less variability compared to "dim1", it still contains some valuable information about the dataset, albeit to a lesser extent.
+
+PCA k-means clustering Male 4 clusters:
+
+```{r}
+fviz_cluster(kmeans(male_processed[,5:12], centers = 4, iter.max = 100, nstart = 100), data= male_processed[, 5:12])
+```
+
+PCA k-means clustering Male 3 clusters:
+
+```{r}
+fviz_cluster(kmeans(male_processed[,5:12], centers = 3, iter.max = 100, nstart = 100), data= male_processed[, 5:12])
+```
+
+4 clusters does indeed not look like the proper amount of clusters, as there is overlap in the clusters. This confirms that 3 clusters is the best custer amount.
+
+-   Dim1 (Principal Component 1): This component captures the majority of the variance in your dataset, specifically 26.6%. It suggests that the patterns or structures present in your data are primarily aligned with this component. In other words, "dim1" summarizes most of the important information contained in your original dataset.
+-   Dim2 (Principal Component 2): This component explains a smaller proportion of the total variance, specifically 25.1%. While it captures less variability compared to "dim1", it still contains some valuable information about the dataset, albeit to a lesser extent.
+
+WSS and the silhouette scores for 3 clusters for the female and male datasets will be used to evaluate the internal clustering performance. The WSS provides a measure of compactness, while the silhouette score provides insight into the separation between clusters. Both metrics together can give you a comprehensive view of the clustering performance.
+
+
+The Within Sum of Squares (WSS), also known as the Within-Cluster Sum of Squares, is a measure of the compactness of clusters in clustering analysis. It quantifies the variability of the data points within each cluster and is a key metric in assessing the performance of clustering algorithms like K-means.
+
+WSS Definition
+WSS is the sum of squared distances between each data point and the centroid of the cluster it belongs to. It can be calculated both for the entire clustering solution (total WSS) and individually for each cluster.
+
+* Total WSS: Sum of the WSS values for all clusters.
+* Cluster-wise WSS: WSS value for each individual cluster.
+
+
+## Hard Clustering
+
+### K-means
+
+```{r}
+# setting the cluster amount to 3 clusters
+cl = 3
+```
+
+```{r}
+# K-means on dataset with 3 clusters
+kmeans_f <-  kmeans(female_processed[, 5:12], centers = cl, nstart = 100, iter.max = 100000)
+kmeans_m <- kmeans(male_processed[,5:12], centers = cl, nstart = 100, iter.max = 100000)
+```
+
+#### K-means female results
+
+```{r}
+# Adding k-means clusters to data frames
+cluster_km_f <- data.frame(kmeans_f$cluster)
+data_f <- cbind(female_processed, cluster_km_f)
+female_processed_no_scale_log <- cbind(female_processed_no_scale_log, cluster_km_f)
+
+# Boxplot
+for (col in names(female_processed_no_scale_log[,5:12])) {
+  boxplot(female_processed_no_scale_log[,col] ~ female_processed_no_scale_log[["kmeans_f.cluster"]], 
+        xlab = "cluster",
+        ylab = col,
+        main = col)
+}
+# the mean of each variable by clusters
+aggregate(female_processed_no_scale_log[,5:12], by = list(cluster = kmeans_f$cluster), mean)
+
+# Calculate silhouette scores per cluster
+silhouette_scoresf <- silhouette(kmeans_f$cluster, dist(female_processed[,5:12]))
+summary(silhouette_scoresf)
+```
+
+```{r}
+# Calculate WSS for each cluster and total WSS for female dataset
+wss_clusters_f <- kmeans_f$withinss
+total_wss_f <- sum(wss_clusters_f)
+cat("Within-cluster Sum of Squares (WSS) for female dataset with 3 clusters:\n")
+cat("Cluster-wise WSS:", wss_clusters_f, "\n")
+cat("Total WSS:", total_wss_f, "\n")
+
+```
+
+
+#### K-means male results
+
+```{r}
+# Adding k-means clusters to data frames
+cluster_km_m <- data.frame(kmeans_m$cluster)
+data_m <- cbind(male_processed, cluster_km_m)
+male_processed_no_scale_log <- cbind(male_processed_no_scale_log, cluster_km_m)
+
+# Boxplot
+for (col in names(male_processed_no_scale_log[,5:12])) {
+  boxplot(male_processed_no_scale_log[,col] ~ male_processed_no_scale_log[["kmeans_m.cluster"]], 
+        xlab = "cluster",
+        ylab = col,
+        main = col)
+}
+# the mean of each variable by clusters
+aggregate(male_processed_no_scale_log[,5:12], by = list(cluster = kmeans_m$cluster), mean)
+
+# Calculate silhouette scores per cluster
+silhouette_scoresm <- silhouette(kmeans_m$cluster, dist(male_processed[,5:12]))
+
+summary(silhouette_scoresm)
+
+# Calculate WSS for each cluster and total WSS for male dataset
+wss_clusters_m <- kmeans_m$withinss
+total_wss_m <- sum(wss_clusters_m)
+cat("Within-cluster Sum of Squares (WSS) for male dataset with 3 clusters:\n")
+cat("Cluster-wise WSS:", wss_clusters_m, "\n")
+cat("Total WSS:", total_wss_m, "\n")
+```
+
+The preliminary outcomes of k-means appear promising, with the silhouette scores being satisfactory.
+
+
+## Soft Clustering
+
+### Fuzzy c-means
+
+m = 2: This is the fuzziness parameter, also known as the fuzzifier or exponent. It determines the degree of fuzziness in the clustering. When m = 1, the algorithm becomes equivalent to hard k-means clustering. As m increases, the clusters become fuzzier. A common choice for this parameter is 2.
+
+#### fuzzy c-means female results
+
+```{r}
+# perform fuzzy k means (soft clustering)
+fuzzy_cmeans_female <- cmeans(female_processed[, 5:12], centers = cl, m = 2, iter.max = 100)
+#summary(fuzzy_cmeans_female)
+fuzzy_cluster_f <- fuzzy_cmeans_female$cluster
+
+# Adding fuzzy c-means clusters to data frames
+data_f <- cbind(data_f, fuzzy_f = fuzzy_cluster_f)
+ female_processed_no_scale_log <- cbind(female_processed_no_scale_log, fuzzy_f = fuzzy_cluster_f)
+
+
+# Boxplot
+for (col in names(female_processed_no_scale_log[,5:12])) {
+  boxplot(female_processed_no_scale_log[[col]] ~ female_processed_no_scale_log[["fuzzy_f"]], 
+        xlab = "cluster",
+        ylab = col,
+        main = col)
+}
+# the mean of each variable by clusters
+aggregate(female_processed_no_scale_log[,5:12], by = list(cluster = fuzzy_cluster_f), mean)
+
+# cluster size
+fuzzy_cmeans_female$size
+
+fuzzy_silh_scores_f <- silhouette(fuzzy_cluster_f, dist(female_processed[,5:12]))
+
+summary(fuzzy_silh_scores_f)
+```
+```{r}
+# Calculate WSS for each cluster
+wss_fuzzy <- function(data, centers, membership) {
+  wss_values <- numeric(nrow(centers))
+  for (k in 1:nrow(centers)) {
+    # Calculate the weighted squared distances for cluster k
+    dists <- (data - centers[k, ])^2
+    wss_values[k] <- sum(membership[, k] * rowSums(dists))
+  }
+  return(wss_values)
+}
+# Extract centers and membership values from fuzzy c-means result
+centers_f <- fuzzy_cmeans_female$centers
+membership_f <- fuzzy_cmeans_female$membership
+
+# Calculate WSS for each cluster
+wss_clusters_f <- wss_fuzzy(female_processed[, 5:12], centers_f, membership_f)
+total_wss_f <- sum(wss_clusters_f)
+
+# Print WSS values
+cat("Within-cluster Sum of Squares (WSS) for female dataset with fuzzy c-means clustering:\n")
+cat("Cluster-wise WSS:", wss_clusters_f, "\n")
+cat("Total WSS:", total_wss_f, "\n")
+
+```
+
+#### fuzzy c-means male results
+
+```{r}
+# perform fuzzy k means (soft clustering)
+fuzzy_cmeans_male <- cmeans(male_processed[, 5:12], centers = cl, m = 2, iter.max = 100)
+#summary(fuzzy_cmeans_male)
+fuzzy_cluster_m <- fuzzy_cmeans_male$cluster
+
+# Adding gmm clusters to data frames
+data_m <- cbind(data_m, fuzzy_m = fuzzy_cluster_m)
+male_processed_no_scale_log <- cbind(male_processed_no_scale_log, fuzzy_m = fuzzy_cluster_m)
+
+
+# Boxplot
+for (col in names(male_processed_no_scale_log[,5:12])) {
+  boxplot(male_processed_no_scale_log[[col]] ~ male_processed_no_scale_log[["fuzzy_m"]], 
+        xlab = "cluster",
+        ylab = col,
+        main = col)
+}
+# the mean of each variable by clusters
+aggregate(male_processed_no_scale_log[,5:12], by = list(cluster = fuzzy_cluster_m), mean)
+
+# cluster size
+fuzzy_cmeans_male$size
+
+fuzzy_silh_scores_m <- silhouette(fuzzy_cluster_m, dist(male_processed[,5:12]))
+
+summary(fuzzy_silh_scores_m)
+
+
+```
+```{r}
+# Extract centers and membership values from fuzzy c-means result
+centers_m <- fuzzy_cmeans_male$centers
+membership_m <- fuzzy_cmeans_male$membership
+
+# Calculate WSS for each cluster
+wss_clusters_m <- wss_fuzzy(male_processed[, 5:12], centers_m, membership_m)
+total_wss_m <- sum(wss_clusters_m)
+
+# Print WSS values
+cat("Within-cluster Sum of Squares (WSS) for male dataset with fuzzy c-means clustering:\n")
+cat("Cluster-wise WSS:", wss_clusters_m, "\n")
+cat("Total WSS:", total_wss_m, "\n")
+
+```
+
+
+# Export data
+
+```{r}
+female_xlsx_mean_k3 <- aggregate(female_processed_no_scale_log[,5:12], by = list(cluster = kmeans_f$cluster), mean)
+
+# naming clusters based on averages
+
+# Function to rename clusters based on conditions
+rename_clusters_female <- function(cluster_means) {
+  renamed_clusters <- character(nrow(cluster_means))
+  
+  for (i in 1:nrow(cluster_means)) {
+    if (cluster_means$BMI[i] > 36.5) {
+      renamed_clusters[i] <- "Obesity-related"
+    } else if (cluster_means$age_at_diagnosis[i] > 61) {
+      renamed_clusters[i] <- "Age-related"
+    } else if (cluster_means$Cholesterol[i] > 6) {
+      renamed_clusters[i] <- "Lipid-related"
+    } else {
+      renamed_clusters[i] <- paste("Cluster", cluster_means$cluster[i])
+    }
+  }
+  
+  return(renamed_clusters)
+}
+
+# Rename clusters for female dataset
+renamed_clusters_f <- rename_clusters_female(female_xlsx_mean_k3)
+
+# Map renamed clusters back to the data for female dataset
+female_processed_no_scale_log$cluster <- renamed_clusters_f[kmeans_f$cluster]
+
+##########################
+male_xlsx_mean_k3 <- aggregate(male_processed_no_scale_log[,5:12], by = list(cluster = kmeans_m$cluster), mean)
+
+# naming clusters based on averages
+
+# Function to rename clusters based on conditions
+rename_clusters_male <- function(cluster_means) {
+  renamed_clusters <- character(nrow(cluster_means))
+  
+  for (i in 1:nrow(cluster_means)) {
+    if (cluster_means$BMI[i] > 32.8) {
+      renamed_clusters[i] <- "Obesity-related"
+    } else if (cluster_means$age_at_diagnosis[i] > 62) {
+      renamed_clusters[i] <- "Age-related"
+    } else if (cluster_means$Cholesterol[i] > 5.5) {
+      renamed_clusters[i] <- "Lipid-related"
+    } else {
+      renamed_clusters[i] <- paste("Cluster", cluster_means$cluster[i])
+    }
+  }
+  
+  return(renamed_clusters)
+}
+
+# Rename clusters for male dataset
+renamed_clusters_m <- rename_clusters_male(male_xlsx_mean_k3)
+
+# Map renamed clusters back to the data for female dataset
+male_processed_no_scale_log$cluster <- renamed_clusters_m[kmeans_m$cluster]
+```
+
+
+```{r eval = FALSE}
+# write data for females and males to xlsx file with clusters
+
+
+# write aggregated data to xlsx
+
+write.xlsx(female_xlsx_mean_k3, file = "kmeans_female_mean_k3.xlsx")
+write.xlsx(male_xlsx_mean_k3, file = "kmeans_male_mean_k3.xlsx")
+
+# write aggregated data to xlsx
+female_xlsx_mean_c3 <- aggregate(female_processed_no_scale_log[,5:12], by = list(cluster = fuzzy_cmeans_female$cluster), mean)
+write.xlsx(female_xlsx_mean_c3, file = "cmeans_female_mean_c3.xlsx")
+
+male_xlsx_mean_c3 <- aggregate(male_processed_no_scale_log[,5:12], by = list(cluster = fuzzy_cmeans_male$cluster), mean)
+write.xlsx(male_xlsx_mean_c3, file = "cmeans_male_mean_c3.xlsx")
+
+# Remove the last column from the data frames
+female_final <- female_processed_no_scale_log[, -c(ncol(female_processed_no_scale_log) - 1, ncol(female_processed_no_scale_log) - 2)]
+male_final <- male_processed_no_scale_log[, -c(ncol(male_processed_no_scale_log) - 1, ncol(male_processed_no_scale_log) - 2)]
+
+write.xlsx(female_final, file = "female_final.xlsx", rowNames = FALSE)
+write.xlsx(male_final, file = "male_final.xlsx", rowNames = FALSE)
+```
+
+# Summarize data
+
+```{r}
+# Summarize min and max per variable per cluster
+summary_stats_km_f <- female_processed_no_scale_log %>%
+  group_by(cluster) %>%
+  summarize(across(5:12, list(min = min, max = max), .names = "{.col}_{.fn}"))
+
+print(summary_stats_km_f)
+```
+
+```{r}
+# Summarize min and max per variable per cluster
+summary_stats_cm_f <- female_processed_no_scale_log %>%
+  group_by(fuzzy_f) %>%
+  summarize(across(5:12, list(min = min, max = max), .names = "{.col}_{.fn}"))
+
+print(summary_stats_cm_f)
+```
+
+```{r}
+# Summarize min and max per variable per cluster
+summary_stats_km_m <- male_processed_no_scale_log %>%
+  group_by(cluster) %>%
+  summarize(across(5:12, list(min = min, max = max), .names = "{.col}_{.fn}"))
+
+print(summary_stats_km_m)
+```
+
+```{r}
+# Summarize min and max per variable per cluster
+summary_stats_cm_m <- male_processed_no_scale_log %>%
+  group_by(fuzzy_m) %>%
+  summarize(across(5:12, list(min = min, max = max), .names = "{.col}_{.fn}"))
+
+print(summary_stats_cm_m)
+```
+
+# Visualise Data with PCA
+
+```{r}
+# Perform PCA on the relevant columns (columns 5 to 12)
+pca_f <- prcomp(female_processed[, 5:12], scale. = TRUE)
+
+# Get the PCA results and convert to a data frame
+pca_f_df <- as.data.frame(pca_f$x)
+
+# Add cluster assignments to the PCA results
+pca_f_df$kmeans <- kmeans_f$cluster
+
+pca_f_df$cmeans <- fuzzy_cmeans_female$cluster
+
+```
+
+```{r}
+# Perform PCA on the relevant columns (columns 5 to 12)
+pca_m <- prcomp(male_processed[, 5:12], scale. = TRUE)
+
+# Get the PCA results and convert to a data frame
+pca_m_df <- as.data.frame(pca_m$x)
+
+# Add cluster assignments to the PCA results
+pca_m_df$kmeans <- kmeans_m$cluster
+
+pca_m_df$cmeans <- fuzzy_cmeans_male$cluster
+
+```
+
+## PCA k-means visualisation
+
+```{r}
+# Plotting the first two principal components
+ggplot(pca_f_df, aes(x = PC1, y = PC2, color = factor(kmeans))) +
+  geom_point(size = 2) +
+  labs(title = "PCA of Female Data with kmeans clusters",
+       x = "Principal Component 1",
+       y = "Principal Component 2",
+       color = "Cluster") +
+  theme_minimal()
+```
+
+```{r}
+# Plotting the first two principal components
+ggplot(pca_f_df, aes(x = PC1, y = PC2, color = factor(cmeans))) +
+  geom_point(size = 2) +
+  labs(title = "PCA of Female Data with c-means clusters",
+       x = "Principal Component 1",
+       y = "Principal Component 2",
+       color = "Cluster") +
+  theme_minimal()
+```
+
+```{r}
+# Plotting the first two principal components
+ggplot(pca_m_df, aes(x = PC1, y = PC2, color = factor(kmeans))) +
+  geom_point(size = 2) +
+  labs(title = "PCA of Male Data with kmeans clusters",
+       x = "Principal Component 1",
+       y = "Principal Component 2",
+       color = "Cluster") +
+  theme_minimal()
+```
+
+```{r}
+# Plotting the first two principal components
+ggplot(pca_m_df, aes(x = PC1, y = PC2, color = factor(cmeans))) +
+  geom_point(size = 2) +
+  labs(title = "PCA of Male Data with c-means clusters",
+       x = "Principal Component 1",
+       y = "Principal Component 2",
+       color = "Cluster") +
+  theme_minimal()
+```

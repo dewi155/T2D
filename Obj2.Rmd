@@ -1,0 +1,764 @@
+---
+title: "Objective 2"
+format: html
+author: "Dewi"
+---
+
+**Contents** 
+* Go to [Descriptive Statistics](#Descriptive) 
+* Go to [ANOVA](#ANOVA) 
+* Go to [Chi-Square](#Chi)
+
+# Load Library
+
+```{r}
+library(readxl)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+```
+
+# Read data
+
+```{r warning=FALSE}
+data <- suppressMessages(read_xlsx(path = "../Objective1/data_master_project_3years.xlsx"))
+female_final <- read_xlsx(path = "../Objective1/female_final.xlsx")
+male_final <- read_xlsx(path = "../Objective1/male_final.xlsx")
+```
+
+# Pre-processing
+
+```{r}
+# Extract additional columns
+#(1:ID, 6:townsend,35:employment, 39:Education, 47:Ethnicbackground, 51:53:Illnessfather, 55:57:Illnessmother, 59:61:Illnesssiblings, 75:MinutesActivity, 83:Sleepduration, 87:Smokingstatus, 91:Alcoholdrinkingstatus, 95:Alcoholfreq, 99:cookedveg, 103:rawveg, 107:Freshfruit, 111:Driedfruit, 115:Oilyfish, 119:Nonoilyfish, 123:Processedmeat, 127:Poultry, 131:Beef, 135:Lamb, 139:Pork ,143:Bread, 147:Tea, 151:Coffee, 274:ICD10, 276:Allcausedementia, 278:Alzheimer, 280:Vasculardementia, 282:Frontotemporaldementia, 284:Stroke, 287:G30Alzheimer, 289:EssentialHypertension, 291:HypertensiveHeartdisease, 304:325:Medication )
+
+additional_columns <- data[, c(1, 6, 75, 83, 87, 91, 95, 99, 103, 107, 111, 115, 119, 123, 127, 131, 135, 143, 147, 151, 47, 35, 39, 67)]
+
+# Replace spaces in column names with underscores
+colnames(additional_columns) <- gsub(" ", "_", colnames(additional_columns))
+
+# Convert specific columns to numeric
+additional_columns[, 1] <- as.numeric(data[[1]])
+additional_columns[, 2] <- as.numeric(data[[6]])
+additional_columns[, 3] <- as.numeric(data[[75]])
+additional_columns[, 4] <- as.numeric(data[[83]])
+
+# Helper function to clean and convert columns to numeric
+clean_and_convert_to_numeric <- function(column) {
+  # Convert to character for text replacement
+  column <- as.character(column)
+  # Replace specific text entries
+  column <- gsub("Less than one", "0", column, ignore.case = TRUE)
+  column <- gsub("Do not know", NA, column, ignore.case = TRUE)
+  column <- gsub("Prefer not to say", NA, column, ignore.case = TRUE)
+  column[column == ""] <- NA  # Replace blanks with NA
+  # Convert to numeric
+  as.numeric(column)
+}
+
+# Apply the helper function to the specified columns
+additional_columns[, 8] <- clean_and_convert_to_numeric(data[[99]])
+additional_columns[, 9] <- clean_and_convert_to_numeric(data[[103]])
+additional_columns[, 10] <- clean_and_convert_to_numeric(data[[107]])
+additional_columns[, 11] <- clean_and_convert_to_numeric(data[[111]])
+additional_columns[, 18] <- clean_and_convert_to_numeric(data[[143]])
+additional_columns[, 19] <- clean_and_convert_to_numeric(data[[147]])
+additional_columns[, 20] <- clean_and_convert_to_numeric(data[[151]])
+
+# Convert specific columns to factors
+additional_columns[, 5] <- as.factor(data[[87]])
+additional_columns[, 6] <- as.factor(data[[91]])
+additional_columns[, 7] <- as.factor(data[[95]])
+additional_columns[, 12] <- as.factor(data[[115]])
+additional_columns[, 13] <- as.factor(data[[119]])
+additional_columns[, 14] <- as.factor(data[[123]])
+additional_columns[, 15] <- as.factor(data[[127]])
+additional_columns[, 16] <- as.factor(data[[131]])
+additional_columns[, 17] <- as.factor(data[[135]])
+additional_columns[, 18] <- as.factor(data[[139]])
+additional_columns[, 21] <- as.factor(data[[47]])
+additional_columns[, 22] <- as.factor(data[[35]])
+additional_columns[, 23] <- as.factor(data[[39]])
+
+
+# Rename the column from ...1 to ID
+additional_columns <- additional_columns %>%
+  rename(ID = ...1)
+colnames(additional_columns)[colnames(additional_columns) == "Salad_/_raw_vegetable_intake"] <- "Salad_raw_vegetable_intake"
+
+```
+
+```{r}
+# Categorize Ethnic background into specified groups
+additional_columns <- additional_columns %>%
+  mutate(Ethnic_group = case_when(
+    Ethnic_background %in% c("British", "White", "Irish", "Any other white background") ~ "White",
+    Ethnic_background %in% c("White and Asian", "White and Black African", "White and Black Caribbean", "Any other mixed background", "Mixed") ~ "Mixed",
+    Ethnic_background %in% c("Black or Black British", "Any other Black background", "African", "Caribbean") ~ "Black",
+    Ethnic_background %in% c("Indian", "Pakistani", "Chinese", "Bangladeshi", "Any other Asian background", "Asian or Asian British") ~ "Asian",
+    Ethnic_background %in% c("Prefer not to answer", "Do not know", "Other ethnic group") ~ "Other",
+    is.na(Ethnic_background) ~ NA_character_
+  )) %>%
+  select(-Ethnic_background)  # Remove the Ethnic_background column
+# Convert Ethnic_group to a factor with specified levels
+ethnic_levels <- c("White", "Mixed", "Black", "Asian", "Other")
+additional_columns$Ethnic_group <- factor(additional_columns$Ethnic_group, levels = ethnic_levels)
+```
+
+cod liver oil capsule -\> omega-3 ?? C10?
+
+```{r}
+# Medications for C10 category ("cod liver oil capsule" ?)
+c10_medications <- c(
+  "simvastatin", "pravastatin", "fluvastatin", "atorvastatin", "rosuvastatin",  "bezafibrate", "bezafibrate product",  "gemfibrozil", "fenofibrate", "simfibrate",  "ciprofibrate", "colestyramine", "colestyramine+aspartame 4g/sachet powder","colestyramine product","colestipol", "nicotinic acid product",  "acipimox",  "omega-3/fish oil supplement", "ezetimibe", "alipogene tiparvovec", "omega-3 fatty acids", "amlodipine",  "ezetrol 10mg tablet", "lipitor 10mg tablet"
+)
+
+# Medications for C02 category
+c02_medications <- c(
+    "rescinnamine",
+    "reserpine",
+    "rauwolfia alkaloids",
+    "deserpidine",
+    "methoserpidine",
+    "bietaserpine",
+    "methyldopa",
+    "clonidine",
+    "guanfacine",
+    "tolonidine",
+    "moxonidine",
+    "rilmenidine",
+    "trimetaphan",
+    "mecamylamine",
+    "prazosin",
+    "indoramin",
+    "trimazosin",
+    "doxazosin",
+    "urapidil",
+    "betanidine",
+    "guanethidine",
+    "guanoxan",
+    "debrisoquine",
+    "guanoclor",
+    "guanazodine",
+    "guanoxabenz",
+    "diazoxide",
+    "dihydralazine",
+    "hydralazine",
+    "endralazine",
+    "cadralazine",
+    "minoxidil",
+    "nitroprusside",
+    "pinacidil",
+    "veratrum",
+    "metirosine",
+    "pargyline",
+    "ketanserin",
+    "aprocitentan",
+    "bosentan",
+    "ambrisentan",
+    "sitaxentan",
+    "macitentan",
+    "riociguat",
+    "tadalafil",
+    "macitentan",
+    "syrosingopine",
+    "guanidine",
+    "guanethidin",
+    "dihydralazine",
+    "hydralazine",
+    "picodralazine"
+)
+
+
+a10b_medications <- c(
+    "phenformin",
+    "metformin",
+    "buformin",
+    "glibenclamide",
+    "chlorpropamide",
+    "tolbutamide",
+    "glibornuride",
+    "tolazamide",
+    "carbutamide",
+    "glipizide",
+   "glipizide product",
+    "gliquidone",
+    "gliclazide",
+    "metahexamide",
+    "glisoxepide",
+    "glimepiride",
+    "acetohexamide",
+    "glymidine",
+    "phenformin",
+    "sulfonylureas",
+    "rosiglitazone",
+   "rosiglitazone 1mg / metformin 500mg tablet",
+    "pioglitazone",
+    "sitagliptin",
+    "vildagliptin",
+    "alogliptin",
+    "saxagliptin",
+    "linagliptin",
+    "repaglinide",
+    "dapagliflozin",
+    "canagliflozin",
+    "acarbose",
+    "gemigliptin",
+    "empagliflozin",
+    "evogliptin",
+    "ertugliflozin",
+    "miglitol",
+    "voglibose",
+    "troglitazone",
+    "lobeglitazone",
+    "teneligliptin",
+    "exenatide",
+    "liraglutide",
+    "lixisenatide",
+    "albiglutide",
+    "dulaglutide",
+    "semaglutide",
+    "beinaglutide",
+    "ipragliflozin",
+    "sotagliflozin",
+    "luseogliflozin",
+    "bexagliflozin",
+    "velagliflozin",
+    "guar gum",
+    "nateglinide",
+    "pramlintide",
+    "benfluorex",
+    "mitiglinide",
+    "imeglimin",
+    "tirzepatide",
+    "carfloglitazar",
+    "dorzagliatin"
+)
+```
+
+```{r}
+# Check for the presence of any c10 medication in columns 304 to 325
+additional_columns$c10 <- apply(data[, 304:325], 1, function(row) {
+  any(sapply(c10_medications, function(med) grepl(med, row, ignore.case = TRUE)))
+})
+
+
+# Check for the presence of any c02 medication in columns 304 to 325
+additional_columns$c02 <- apply(data[, 304:325], 1, function(row) {
+  any(sapply(c02_medications, function(med) grepl(med, row, ignore.case = TRUE)))
+})
+
+
+# Check for the presence of any c02 medication in columns 304 to 325
+additional_columns$a10b <- apply(data[, 304:325], 1, function(row) {
+  any(sapply(a10b_medications, function(med) grepl(med, row, ignore.case = TRUE)))
+})
+```
+
+```{r}
+# Define a function to map the original categories to new categories
+map_to_new_category <- function(status) {
+  if (is.na(status)) {
+    return(NA)
+  } else if (grepl("In paid employment or self-employed", status)) {
+    return("Employed")
+  } else if (grepl("Retired", status)) {
+    return("Retired")
+  } else if (grepl("Unable to work because of sickness or disability", status)) {
+    return("Unable to work (sickness/disability)")
+  } else if (grepl("Full or part-time student", status)) {
+    return("Student")
+  } else if (grepl("Unemployed", status)) {
+    return("Unemployed")
+  } else if (grepl("Looking after home and/or family", status)) {
+    return("Looking after home/family")
+  } else if (grepl("Doing unpaid or voluntary work", status)) {
+    return("Doing unpaid/voluntary work")
+
+  } else if (status == "None of the above") {
+    return("Other")
+  } else if (status == "Prefer not to answer") {
+    return("Prefer not to answer")
+  } else {
+    return(NA)
+  }
+}
+
+# Apply the mapping function to the dataframe
+additional_columns$Employment_status <- sapply(additional_columns$Current_employment_status, map_to_new_category)
+
+# Convert Employment_status to a factor with specified levels
+Employment_status <- c("Employed", "Retired", "Unable to work (sickness/disability)", "Unemployed", "Looking after home/family", "Doing unpaid/voluntary work", "Student", "Other", "Prefer not to answer")
+additional_columns$Employment_status <- factor(additional_columns$Employment_status, levels = Employment_status)
+
+additional_columns <- additional_columns %>%
+  select(-Current_employment_status)
+```
+
+```{r}
+# The hierarchy from highest to lowest educated: College or University,NVQ or HND or HNC,A levels/AS levels, O levels/GCSEs,CSEs
+
+# Define a function to map the original categories to new categories
+map_to_new_education <- function(status) {
+  if (is.na(status)) {
+    return(NA)
+  } else if (grepl("College or University degree", status)) {
+    return("College or University degree")
+  } else if (grepl("NVQ or HND or HNC or equivalent", status)) {
+    return("NVQ or HND or HNC or equivalent")
+  } else if (grepl("A levels/AS levels or equivalent", status)) {
+    return("A levels/AS levels or equivalent")
+  } else if (grepl("O levels/GCSEs or equivalent", status)) {
+    return("O levels/GCSEs or equivalent")
+  } else if (grepl("CSEs or equivalent", status)) {
+    return("CSEs or equivalent")
+  } else if (grepl("Other professional qualifications eg: nursing, teaching", status)) {
+    return("Other professional qualifications")
+  } else if (status == "None of the above") {
+    return("None")
+  } else if (status == "Prefer not to answer") {
+    return("Prefer not to answer")
+  } else {
+    return(NA)
+  }
+}
+
+# Apply the mapping function to the dataframe
+additional_columns$Qualification <- sapply(additional_columns$Education, map_to_new_education)
+
+# Convert Qualification to a factor with specified levels
+Qualification <- c("College or University degree", "NVQ or HND or HNC or equivalent", "A levels/AS levels or equivalent", "O levels/GCSEs or equivalent", "CSEs or equivalent", "Other professional qualifications", "None", "Prefer not to answer")
+additional_columns$Qualification <- factor(additional_columns$Qualification, levels = Qualification)
+additional_columns <- additional_columns %>%
+  select(-Education)
+```
+
+```{r}
+summary(additional_columns)
+```
+
+```{r}
+map_to_new_smoking <- function(status) {
+  if (is.na(status)) {
+    return(NA)
+  } else if (grepl("Previous", status)) {
+    return("Ever")
+  } else if (grepl("Current", status)) {
+    return("Ever")
+  } else if (grepl("Never", status)) {
+    return("Never")
+  } else if (status == "Prefer not to answer") {
+    return("Prefer not to answer")
+  } else {
+    return(NA)
+  }
+}
+
+# Apply the mapping function to the dataframe
+additional_columns$Smoking_ever <- sapply(additional_columns$Smoking_status, map_to_new_smoking)
+
+# Convert Smoking_ever to a factor with specified levels
+Smoking_ever <- c("Ever", "Never", "Prefer not to answer")
+additional_columns$Smoking_ever <- factor(additional_columns$Smoking_ever, levels = Smoking_ever)
+
+# Print the original and new categories
+print(additional_columns[, c("Smoking_status", "Smoking_ever")])
+
+```
+
+```{r}
+map_to_new_drinking <- function(status) {
+  if (is.na(status)) {
+    return(NA)
+  } else if (grepl("Previous", status)) {
+    return("Ever")
+  } else if (grepl("Current", status)) {
+    return("Ever")
+  } else if (grepl("Never", status)) {
+    return("Never")
+  } else if (status == "Prefer not to answer") {
+    return("Prefer not to answer")
+  } else {
+    return(NA)
+  }
+}
+
+# Apply the mapping function to the dataframe
+additional_columns$Drinking_ever <- sapply(additional_columns$Alcohol_drinker_status, map_to_new_drinking)
+
+# Convert Drinking_ever to a factor with specified levels
+Drinking_ever <- c("Ever", "Never", "Prefer not to answer")
+additional_columns$Drinking_ever<- factor(additional_columns$Drinking_ever, levels = Drinking_ever)
+
+# Print the original and new categories
+print(additional_columns[, c("Alcohol_drinker_status", "Drinking_ever")])
+
+```
+
+```{r}
+# Create a new column where TRUE if 'Z83.3' is present in column ICD10 or 'Diabetes' is present in columns 51:53, 55:57, 59:61
+additional_columns$family_history_of_diabetes <- apply(data, 1, function(row) {
+  grepl("Z83\\.3", row[274]) || any(grepl("Diabetes", row[c(51:53, 55:57, 59:61)], ignore.case = TRUE))
+})
+
+# Create a new column where TRUE if 'Alzheimer's disease/dementia' is present in columns 51:53, 55:57, 59:61
+additional_columns$family_history_of_dementia <- apply(data[, c(51:53, 55:57, 59:61)], 1, function(row) {
+  any(grepl("Alzheimer's disease/dementia", row, ignore.case = TRUE))
+})
+
+# Create the new column in the additional_columns dataframe to check if cardiovascular diseases are present in ICD10 OR col274
+additional_columns$Cardiovascular_disease_present <- apply(data, 1, function(row) {
+  icd10_present <- grepl("\\b(I00|I0[1-2]|I05|I0[6-9]|I2[0-5]|I3[0-5]|I4[0-9]|I5[0-2]|I6[0-9]|I7[0-9]|I8[0-9]|I9[5-9])\\b", row[274])
+  text_present <- !is.na(row[284]) & nchar(as.character(row[284])) > 0
+  return(icd10_present | text_present)
+})
+
+# Create the new column in the additional_columns dataframe to check if hypertension is present in ICD10, col289,col291
+additional_columns$Hypertension_present <- apply(data, 1, function(row) {
+  icd10_present <- grepl("\\b(I10|I1[1-5])\\b", row[274])
+  text_present <- (!is.na(row[289]) & nchar(as.character(row[289])) > 0) |
+                  (!is.na(row[291]) & nchar(as.character(row[291])) > 0)
+  return(icd10_present | text_present)
+})
+
+# Create the new column in the additional_columns dataframe to check if dementia/Alzheimers is present in ICD10, col276,278,280,282,287
+additional_columns$Dementia_Alzheimers_present <- apply(data, 1, function(row) {
+  icd10_present <- grepl("\\b(F0[0-4])\\b", row[274])
+  text_present <- (!is.na(row[276]) & nchar(as.character(row[276])) > 0) |
+                  (!is.na(row[278]) & nchar(as.character(row[278])) > 0) |
+                  (!is.na(row[280]) & nchar(as.character(row[280])) > 0) |
+                  (!is.na(row[282]) & nchar(as.character(row[282])) > 0) |
+                  (!is.na(row[287]) & nchar(as.character(row[287])) > 0)
+  return(icd10_present | text_present)
+})
+```
+
+```{r}
+# Display summary of additional columns
+summary(additional_columns)
+```
+
+# Combining data
+
+```{r}
+female <- merge(female_final, additional_columns, by = "ID")
+# Create a new column Obesity based on Body_mass_index_(BMI)
+female$Obesity <- female$BMI >= 30
+head(female)
+```
+
+```{r}
+male <- merge(male_final, additional_columns, by = "ID")
+# Create a new column Obesity based on Body_mass_index_(BMI)
+male$Obesity <- male$BMI >= 30
+head(male)
+```
+
+# Risk-profiling
+
+## Descriptive statistics {#Descriptive}
+
+### Descriptive statistics female
+
+```{r warning=FALSE}
+# Define the function to generate descriptive statistics for a given variable
+generate_descriptive_stats <- function(data, var) {
+  data %>%
+    group_by(cluster) %>%
+    summarize(N = n(),
+              Mean = mean(.data[[var]], na.rm = TRUE),
+              SD = sd(.data[[var]], na.rm = TRUE)) %>%
+    mutate(Variable = var)
+}
+
+# List of numeric variables to test
+numeric_vars <- c("age_at_diagnosis", "Cholesterol", "HDL", "LDL", "CRP", "Townsend_deprivation_index_at_recruitment", "Summed_MET_minutes_per_week_for_all_activity","Sleep_duration", "Cooked_vegetable_intake", "Salad_raw_vegetable_intake", "Fresh_fruit_intake", "Dried_fruit_intake", "Tea_intake", "Coffee_intake")
+
+# Custom bin widths for each variable (adjust as needed)
+bin_widths <- c(5, 0.5, 0.2, 0.5, 2, 1, 2000, 1, 1, 1, 1, 1, 1, 1)
+
+# Generate descriptive statistics for each numeric variable in female dataset
+descriptive_stats_female <- lapply(numeric_vars, function(var) {
+  generate_descriptive_stats(female, var)
+})
+
+# Combine all results into a single data frame
+descriptive_stats_female <- bind_rows(descriptive_stats_female)
+
+# Print the results
+print(descriptive_stats_female)
+
+# Plot histograms for each numeric variable grouped by cluster
+plot_list <- list()
+for (i in seq_along(numeric_vars)) {
+  var <- numeric_vars[i]
+  bin_width <- bin_widths[i]
+  
+  plot_list[[i]] <- ggplot(female, aes_string(x = var)) +
+    geom_histogram(aes(fill = cluster), color = "black", binwidth = bin_width) + 
+    facet_wrap(~cluster) +
+    ggtitle(paste("Distribution of", var, "per cluster for females")) +
+    theme_minimal()
+}
+
+# Display the plots
+for (plot in plot_list) {
+  print(plot)
+}
+
+
+```
+
+### Descriptive statistics male
+
+```{r warning=FALSE}
+# Generate descriptive statistics for each numeric variable in male dataset
+descriptive_stats_male <- lapply(numeric_vars, function(var) {
+  generate_descriptive_stats(male, var)
+})
+
+# Combine all results into a single data frame
+descriptive_stats_male <- bind_rows(descriptive_stats_male)
+
+# Print the results
+print(descriptive_stats_male)
+
+# Plot histograms for each numeric variable grouped by cluster
+plot_list <- list()
+for (i in seq_along(numeric_vars)) {
+  var <- numeric_vars[i]
+  bin_width <- bin_widths[i]
+  
+  plot_list[[i]] <- ggplot(male, aes_string(x = var)) +
+    geom_histogram(aes(fill = cluster), color = "black", binwidth = bin_width) + 
+    facet_wrap(~cluster) +
+    ggtitle(paste("Distribution of", var, "per cluster for males")) +
+    theme_minimal()
+}
+
+# Display the plots
+for (plot in plot_list) {
+  print(plot)
+}
+```
+
+## ANOVA {#ANOVA}
+
+```{r}
+# Define a function to perform ANOVA for a list of numeric variables
+perform_anova <- function(data, numeric_vars) {
+  anova_results <- list()
+  for(var in numeric_vars) {
+    formula <- as.formula(paste(var, "~ cluster"))
+    aov_result <- aov(formula, data = data)
+    anova_summary <- summary(aov_result)
+    
+    # Perform Tukey's HSD test
+    tukey_result <- TukeyHSD(aov_result)
+    
+    # Visualize Tukey's HSD test
+    tukey_plot <- plot(tukey_result)
+    
+    # Add the ANOVA summary and Tukey's HSD plot to the list
+    anova_results[[var]] <- list("ANOVA Summary" = anova_summary, "Tukey Plot" = tukey_plot)
+  }
+  names(anova_results) <- numeric_vars
+  return(anova_results)
+}
+
+# Perform ANOVA for each numeric variable in female dataset
+anova_results_female <- perform_anova(female, numeric_vars)
+
+# Perform ANOVA for each numeric variable in male dataset
+anova_results_male <- perform_anova(male, numeric_vars)
+
+# Print the results
+print("ANOVA Results for Female Dataset:")
+anova_results_female
+print("ANOVA Results for Male Dataset:")
+anova_results_male
+```
+
+### Post-hoc Analysis (if significant)
+
+If the ANOVA test indicates significant differences, perform a post-hoc analysis (e.g., Tukey's HSD) to determine which specific groups differ:
+
+```{r}
+# Define a function to perform ANOVA and Tukey's HSD for a single variable
+perform_anova_tukey <- function(data, var) {
+  formula <- as.formula(paste(var, "~ cluster"))
+  aov_result <- aov(formula, data = data)
+  tukey_result <- TukeyHSD(aov_result)
+  list(anova = summary(aov_result), tukey = tukey_result)
+}
+
+# Define a function to perform ANOVA and Tukey's HSD for a list of numeric variables
+perform_anova_tukey_for_vars <- function(data, numeric_vars) {
+  results <- lapply(numeric_vars, function(var) {
+    perform_anova_tukey(data, var)
+  })
+  names(results) <- numeric_vars
+  return(results)
+}
+
+# List of numeric variables to test
+numeric_vars_f <- c("age_at_diagnosis", "Summed_MET_minutes_per_week_for_all_activity", "Townsend_deprivation_index_at_recruitment","Cholesterol", "HDL", "LDL", "CRP", "Fresh_fruit_intake", "Dried_fruit_intake", "Tea_intake")
+
+# List of numeric variables to test
+numeric_vars_m <- c("age_at_diagnosis", "Summed_MET_minutes_per_week_for_all_activity", "Townsend_deprivation_index_at_recruitment", "Cholesterol", "HDL", "LDL", "CRP", "Sleep_duration","Fresh_fruit_intake", "Coffee_intake")
+
+# Perform ANOVA and Tukey's HSD for each numeric variable in female dataset
+anova_tukey_results_female <- perform_anova_tukey_for_vars(female, numeric_vars_f)
+
+# Perform ANOVA and Tukey's HSD for each numeric variable in male dataset
+anova_tukey_results_male <- perform_anova_tukey_for_vars(male, numeric_vars_m)
+
+# Print the results
+print("ANOVA and Tukey's HSD Results for Female Dataset:")
+anova_tukey_results_female
+
+print("ANOVA and Tukey's HSD Results for Male Dataset:")
+anova_tukey_results_male
+```
+
+### Check ANOVA assumptions
+
+Ensure that the assumptions of ANOVA (normality and homogeneity of variances) are met. Check these assumptions with diagnostic plots:
+
+```{r eval=FALSE}
+# Function to plot ANOVA diagnostics
+plot_anova_diagnostics <- function(aov_result, var_name) {
+  par(mfrow = c(2, 2))
+  plot(aov_result, main = var_name)
+}
+
+# Plot diagnostics for female dataset
+for (var in numeric_vars_f) {
+  plot_anova_diagnostics(anova_tukey_results_female[[var]]$anova, paste("Female -", var))
+}
+
+# Plot diagnostics for male dataset
+for (var in numeric_vars_m) {
+  plot_anova_diagnostics(anova_tukey_results_male[[var]]$anova, paste("Male -", var))
+}
+
+```
+
+## Chi-Square {#Chi}
+
+```{r}
+# List of categorical variables
+categorical_vars <- c("Ethnic_group", "c10", "c02", "a10b", "Employment_status", 
+                      "Qualification", "Smoking_ever","Smoking_status", "Drinking_ever", "Alcohol_drinker_status", "Alcohol_intake_frequency","family_history_of_diabetes", "family_history_of_dementia", "Cardiovascular_disease_present", "Hypertension_present", "Dementia_Alzheimers_present", "Obesity","Oily_fish_intake", "Non-oily_fish_intake", "Processed_meat_intake", "Poultry_intake", "Beef_intake", "Lamb/mutton_intake", "Bread_intake" )
+
+# Function to perform Chi-Square test for a list of categorical variables
+perform_chi_square_tests <- function(data, categorical_vars, cluster_var) {
+  chi_square_results <- lapply(categorical_vars, function(var) {
+    # Create a contingency table
+    contingency_table <- table(data[[cluster_var]], data[[var]])
+    
+    # Perform Chi-Square test
+    chi_square_test <- chisq.test(contingency_table)
+    
+    # Return the result as a list
+    list(
+      variable = var,
+      table = contingency_table,
+      test_result = chi_square_test
+    )
+  })
+  
+  # Name the list elements with the variable names
+  names(chi_square_results) <- categorical_vars
+  return(chi_square_results)
+}
+
+```
+
+```{r}
+# Function to create bar plots for each categorical variable by cluster
+create_bar_plots <- function(data, categorical_vars, cluster_var) {
+  for (var in categorical_vars) {
+    p <- ggplot(data, aes_string(x = cluster_var, fill = var)) +
+      geom_bar(position = "dodge") +
+      labs(title = paste("Distribution of", var, "by", cluster_var),
+           x = cluster_var, y = "Count") +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    
+    print(p)
+  }
+}
+
+# Generate bar plots for the female dataset
+create_bar_plots(female, categorical_vars, "cluster")
+```
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(tidyr)
+
+# Function to create crosstabs with counts and percentages for each categorical variable per cluster
+create_crosstabs <- function(data, categorical_vars, cluster_var) {
+  results <- list()
+  
+  for (var in categorical_vars) {
+    # Create the crosstab with counts
+    crosstab <- data %>%
+      group_by(!!sym(cluster_var), !!sym(var)) %>%
+      tally() %>%
+      spread(key = !!sym(var), value = n, fill = 0) %>%
+      ungroup()
+    
+    # Calculate percentages
+    crosstab_percent <- crosstab %>%
+      mutate_if(is.numeric, ~ . / sum(.) * 100)
+    
+    # Combine counts and percentages
+    combined_crosstab <- crosstab %>%
+      gather(key = "variable", value = "count", -!!sym(cluster_var)) %>%
+      left_join(
+        crosstab_percent %>%
+          gather(key = "variable", value = "percent", -!!sym(cluster_var)),
+        by = c(cluster_var, "variable")
+      )
+    
+    # Store the result in the list
+    results[[var]] <- combined_crosstab
+  }
+  
+  return(results)
+}
+# Generate crosstabs for the female dataset
+crosstabs_female <- create_crosstabs(female, categorical_vars, "cluster")
+
+# Print the results for the first variable as an example
+print(crosstabs_female[[1]])
+```
+
+
+```{r}
+# Perform Chi-Square tests for the female dataset
+chi_square_results_female <- perform_chi_square_tests(female, categorical_vars, "cluster")
+
+# Print the results
+print("Chi-Square Test Results for Female Dataset:")
+for (result in chi_square_results_female) {
+  cat("\nVariable:", result$variable, "\n")
+  print(result$table)
+  print(result$test_result)
+}
+```
+
+```{r}
+# Perform Chi-Square tests for the female dataset
+chi_square_results_male <- perform_chi_square_tests(male, categorical_vars, "cluster")
+
+# Print the results
+print("Chi-Square Test Results for Male Dataset:")
+for (result in chi_square_results_male) {
+  cat("\nVariable:", result$variable, "\n")
+  print(result$table)
+  print(result$test_result)
+}
+```
