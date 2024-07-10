@@ -35,6 +35,11 @@ library(dendextend) # Enhance hierarchical clustering dendrogram visualizations
 
 # Summarizing data
 library(dplyr)
+
+library(fpc)
+
+library(NbClust)
+
 ```
 
 # Read and split data
@@ -254,30 +259,222 @@ Cluster tendency with Hopkins statistics
 
 ```{r eval=FALSE}
 # Compute Hopkins statistic 
-result_tendency_female <- get_clust_tendency(female_processed[, 5:12], n = nrow(female_processed)-1, graph = FALSE)
+result_tendency_female <- get_clust_tendency(female_processed[, 5:12], n = nrow(female_processed)-1, graph = TRUE)
 result_tendency_female$hopkins_stat
 ```
 
 A hopkins statistics of 0.77, indicate strong cluster tendency. The data likely has well-defined clusters.
 
-Finding optimal cluster number with Sum of Squares, Silhouette score and GAP-distance for females:
+```{r eval=FALSE}
+# Compute Hopkins statistic 
+result_tendency_male <- get_clust_tendency(male_processed[, 5:12], n = nrow(male_processed)-1, graph = FALSE)
+result_tendency_male$hopkins_stat
+```
+Finding optimal cluster number with Sum of Squares and Silhouette score for females:
 
-```{r optimal_female}
-fviz_nbclust(female_processed[, 5:12], kmeans, method = "wss")
-fviz_nbclust(female_processed[, 5:12], kmeans, method = "silhouette")
-fviz_nbclust(female_processed[, 5:12], kmeans, method = "gap_stat", iter.max=50)
+```{r optimal_female eval = FALSE}
+wss_females_plot <- fviz_nbclust(female_processed[, 5:12], kmeans, method = "wss", k.max=6, nboot=100)+
+geom_vline(xintercept = 3, linetype = 2)+
+  ggtitle("Female Within sum of squares")+
+  theme(
+    plot.title = element_text(size = 20, face = "bold"),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 16),
+    legend.text = element_text(size = 14))
+
+sil_females_plot <- fviz_nbclust(female_processed[, 5:12], kmeans, method = "silhouette", k.max=6, nboot=100)+
+  ggtitle("Female Silhouette Scores")+
+  theme(
+    plot.title = element_text(size = 20, face = "bold"),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 16),
+    legend.text = element_text(size = 14))
+#fviz_nbclust(female_processed[, 5:12], kmeans, method = "gap_stat", iter.max=50, k.max=6, nboot=100)
+
+wss_female_data <- wss_females_plot$data
+sil_female_data <- sil_females_plot$data
+
+# Display the plot
+print(wss_females_plot)
+print(sil_females_plot)
+# Save the plot as an image
+ggsave("optimal_clusters_wss_females.png", plot = wss_females_plot, width = 8, height = 6)
+ggsave("optimal_clusters_sil_females.png", plot = sil_females_plot, width = 8, height = 6)
 ```
-Finding optimal cluster number with Sum of Squares, Silhouette score and GAP-distance for males:
-```{r optimal_male}
-fviz_nbclust(male_processed[, 5:12], kmeans, method = "wss", iter.max=50)
-fviz_nbclust(male_processed[, 5:12], kmeans, method = "silhouette")
-fviz_nbclust(male_processed[, 5:12], kmeans, method = "gap_stat", iter.max=50)
+Finding optimal cluster number with Sum of Squares and Silhouette score for males:
+```{r optimal_male eval = FALSE}
+wss_males_plot <- fviz_nbclust(male_processed[, 5:12], kmeans, method = "wss", iter.max=50, k.max=6, nboot=100)+
+geom_vline(xintercept = 3, linetype = 2)+
+  ggtitle("Male Within sum of squares")+
+  theme(
+    plot.title = element_text(size = 20, face = "bold"),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 16),
+    legend.text = element_text(size = 14))
+sil_males_plot <- fviz_nbclust(male_processed[, 5:12], kmeans, method = "silhouette", k.max=6, nboot=100)+
+  ggtitle("Male Silhouette score")+
+  theme(
+    plot.title = element_text(size = 20, face = "bold"),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 16),
+    legend.text = element_text(size = 14))
+#fviz_nbclust(male_processed[, 5:12], kmeans, method = "gap_stat", iter.max=50, k.max=6, nboot=100)
+
+wss_male_data <- wss_males_plot$data
+sil_male_data <- sil_males_plot$data
+# Display the plot
+print(wss_males_plot)
+print(sil_males_plot)
+# Save the plot as an image
+ggsave("optimal_clusters_wss_males.png", plot = wss_males_plot, width = 8, height = 6)
+ggsave("optimal_clusters_sil_males.png", plot = sil_males_plot, width = 8, height = 6)
 ```
+
+```{r}
+
+# Functions for clustering indices
+calculate_indices <- function(data, k_range) {
+  silhouette_score <- function(k) {
+    km <- kmeans(data, centers = k, nstart = 100, iter.max = 10000, algorithm = "Lloyd")
+    ss <- silhouette(km$cluster, dist(data, method = "euclidean"))
+    mean(ss[, 3])
+  }
+  
+  calinski_harabasz_index <- function(k) {
+    km <- kmeans(data, centers = k, nstart = 100, iter.max = 10000, algorithm = "Lloyd")
+    ch <- NbClust(data, diss = NULL, distance = "euclidean", min.nc = k, max.nc = k, method = "kmeans", index = "ch")$All.index
+    ifelse(length(ch) > 0, ch, NA)
+  }
+  
+  davies_bouldin_index <- function(k) {
+    km <- kmeans(data, centers = k, nstart = 100, iter.max = 10000, algorithm = "Lloyd")
+    db <- NbClust(data, diss = NULL, distance = "euclidean", min.nc = k, max.nc = k, method = "kmeans", index = "db")$All.index
+    ifelse(length(db) > 0, db, NA)
+  }
+
+  avg_sil <- sapply(k_range, silhouette_score)
+  ch_index <- sapply(k_range, calinski_harabasz_index)
+  db_index <- sapply(k_range, davies_bouldin_index)
+  
+  list(avg_sil = avg_sil, ch_index = ch_index, db_index = db_index)
+}
+
+# Range of cluster numbers
+k_range <- 2:6
+
+# Calculate indices for females
+
+female_indices <- calculate_indices(female_processed[, 5:12], k_range)
+
+# Calculate indices for males
+
+male_indices <- calculate_indices(male_processed[, 5:12], k_range)
+# Plotting results
+
+# Female plots
+plot(k_range, female_indices$avg_sil, type = 'b', pch = 19, xlab = 'Number of clusters', ylab = 'Average Silhouette Scores', main = 'Female Silhouette Scores')
+plot(k_range, female_indices$ch_index, type = 'b', pch = 19, xlab = 'Number of clusters', ylab = 'Calinski-Harabasz Index', main = 'Female Calinski-Harabasz Index')
+plot(k_range, female_indices$db_index, type = 'b', pch = 19, xlab = 'Number of clusters', ylab = 'Davies-Bouldin Index', main = 'Female Davies-Bouldin Index')
+
+# Male plots
+plot(k_range, male_indices$avg_sil, type = 'b', pch = 19, xlab = 'Number of clusters', ylab = 'Average Silhouette Scores', main = 'Male Silhouette Scores')
+plot(k_range, male_indices$ch_index, type = 'b', pch = 19, xlab = 'Number of clusters', ylab = 'Calinski-Harabasz Index', main = 'Male Calinski-Harabasz Index')
+plot(k_range, male_indices$db_index, type = 'b', pch = 19, xlab = 'Number of clusters', ylab = 'Davies-Bouldin Index', main = 'Male Davies-Bouldin Index')
+
+par(mfrow = c(1, 1)) # Resetting the plot layout
+
+
+
+```
+
+```{r}
+# Functions for clustering indices
+calculate_indices <- function(data, k_range) {
+  silhouette_score <- function(k) {
+    km <- kmeans(data, centers = k, nstart = 100, iter.max = 10000, algorithm = "Lloyd")
+    ss <- silhouette(km$cluster, dist(data, method = "euclidean"))
+    mean(ss[, 3])
+  }
+  
+  calinski_harabasz_index <- function(k) {
+    km <- kmeans(data, centers = k, nstart = 100, iter.max = 10000, algorithm = "Lloyd")
+    ch <- NbClust(data, diss = NULL, distance = "euclidean", min.nc = k, max.nc = k, method = "kmeans", index = "ch")$All.index
+    ifelse(length(ch) > 0, ch, NA)
+  }
+  
+  davies_bouldin_index <- function(k) {
+    km <- kmeans(data, centers = k, nstart = 100, iter.max = 10000, algorithm = "Lloyd")
+    db <- NbClust(data, diss = NULL, distance = "euclidean", min.nc = k, max.nc = k, method = "kmeans", index = "db")$All.index
+    ifelse(length(db) > 0, db, NA)
+  }
+
+  avg_sil <- sapply(k_range, silhouette_score)
+  ch_index <- sapply(k_range, calinski_harabasz_index)
+  db_index <- sapply(k_range, davies_bouldin_index)
+  
+  list(avg_sil = avg_sil, ch_index = ch_index, db_index = db_index)
+}
+
+# Range of cluster numbers
+k_range <- 2:6
+
+# Calculate indices for females
+female_indices <- calculate_indices(female_processed[, 5:12], k_range)
+
+# Calculate indices for males
+male_indices <- calculate_indices(male_processed[, 5:12], k_range)
+
+# Save plots for females
+png("female_silhouette_scores.png", width = 800, height = 600)
+plot(k_range, female_indices$avg_sil, type = 'b', pch = 19, col="skyblue", xlab = 'Number of clusters', ylab = 'Average Silhouette Scores', main = 'Female Silhouette Scores')
+dev.off()
+
+png("female_calinski_harabasz_index.png", width = 800, height = 600)
+plot(k_range, female_indices$ch_index, type = 'b', pch = 19, col="skyblue",xlab = 'Number of clusters', ylab = 'Calinski-Harabasz Index', main = 'Female Calinski-Harabasz Index')
+abline(v = 2, lty = 2)
+dev.off()
+
+png("female_davies_bouldin_index.png", width = 800, height = 600)
+plot(k_range, female_indices$db_index, type = 'b', pch = 19, col="skyblue", xlab = 'Number of clusters', ylab = 'Davies-Bouldin Index', main = 'Female Davies-Bouldin Index')
+abline(v = 3, lty = 2)
+dev.off()
+
+# Save plots for males
+png("male_silhouette_scores.png", width = 800, height = 600)
+plot(k_range, male_indices$avg_sil, type = 'b', pch = 19, col="skyblue", xlab = 'Number of clusters', ylab = 'Average Silhouette Scores', main = 'Male Silhouette Scores')
+dev.off()
+
+png("male_calinski_harabasz_index.png", width = 800, height = 600)
+plot(k_range, male_indices$ch_index, type = 'b', pch = 19, col="skyblue",xlab = 'Number of clusters', ylab = 'Calinski-Harabasz Index', main = 'Male Calinski-Harabasz Index')
+abline(v = 2, lty = 2)
+dev.off()
+
+png("male_davies_bouldin_index.png", width = 800, height = 600)
+plot(k_range, male_indices$db_index, type = 'b', pch = 19, col="skyblue",xlab = 'Number of clusters', ylab = 'Davies-Bouldin Index', main = 'Male Davies-Bouldin Index')
+abline(v = 3, lty = 2)
+dev.off()
+
+par(mfrow = c(1, 1)) # Resetting the plot layout
+
+```
+
 
 3 clusters seems like the best amount for both female and male.
 
 We can perform a cluster stability test.
-```{r}
+```{r eval = FALSE}
 library(fpc)
 
 # Perform cluster-wise stability evaluation using clusterboot
@@ -296,14 +493,16 @@ To visualize the clusters in 2 dimensions, PCA can be performed. PCA reduces the
 
 PCA k-means clustering Female 4 clusters:
 
-```{r}
-fviz_cluster(kmeans(female_processed[,5:12], centers = 4, iter.max = 100, nstart = 100), data= female_processed[, 5:12])
+```{r eval = FALSE}
+pca_female_4clusters <- fviz_cluster(kmeans(female_processed[,5:12], centers = 4, iter.max = 100, nstart = 100), data= female_processed[, 5:12])
+ggsave("pca_female_4clusters.png", plot = pca_female_4clusters, width = 8, height = 6)
 ```
 
 PCA k-means clustering Female 3 clusters:
 
-```{r}
-fviz_cluster(kmeans(female_processed[,5:12], centers = 3, iter.max = 100, nstart = 100), data= female_processed[, 5:12])
+```{r eval = FALSE}
+pca_female_3clusters <- fviz_cluster(kmeans(female_processed[,5:12], centers = 3, iter.max = 100, nstart = 100), data= female_processed[, 5:12])
+ggsave("pca_female_3clusters_small.png", plot = pca_female_3clusters, width = 4, height = 3)
 ```
 
 -   Dim1 (Principal Component 1): This component captures the majority of the variance in your dataset, specifically 27.2%. It suggests that the patterns or structures present in your data are primarily aligned with this component. In other words, "dim1" summarizes most of the important information contained in your original dataset.
@@ -311,13 +510,13 @@ fviz_cluster(kmeans(female_processed[,5:12], centers = 3, iter.max = 100, nstart
 
 PCA k-means clustering Male 4 clusters:
 
-```{r}
+```{r eval = FALSE}
 fviz_cluster(kmeans(male_processed[,5:12], centers = 4, iter.max = 100, nstart = 100), data= male_processed[, 5:12])
 ```
 
 PCA k-means clustering Male 3 clusters:
 
-```{r}
+```{r eval = FALSE}
 fviz_cluster(kmeans(male_processed[,5:12], centers = 3, iter.max = 100, nstart = 100), data= male_processed[, 5:12])
 ```
 
@@ -386,6 +585,15 @@ cat("Total WSS:", total_wss_f, "\n")
 
 ```
 
+```{r}
+# Calculate Calinski-Harabasz index for female dataset
+ch_index_f <- cluster.stats(dist(female_processed[, 5:12]), kmeans_f$cluster)$ch
+cat("Calinski-Harabasz Index for female dataset with 3 clusters:", ch_index_f, "\n")
+
+# Calculate Davies-Bouldin index for female dataset
+db_index_f <- cluster.stats(dist(female_processed[, 5:12]), kmeans_f$cluster)$db
+cat("Davies-Bouldin Index for female dataset with 3 clusters:", db_index_f, "\n")
+```
 
 #### K-means male results
 
@@ -430,8 +638,9 @@ m = 2: This is the fuzziness parameter, also known as the fuzzifier or exponent.
 #### fuzzy c-means female results
 
 ```{r}
+set.seed(555)
 # perform fuzzy k means (soft clustering)
-fuzzy_cmeans_female <- cmeans(female_processed[, 5:12], centers = cl, m = 2, iter.max = 100)
+fuzzy_cmeans_female <- cmeans(female_processed[, 5:12], centers = cl, m = 2, iter.max = 10000)
 #summary(fuzzy_cmeans_female)
 fuzzy_cluster_f <- fuzzy_cmeans_female$cluster
 
@@ -456,6 +665,32 @@ fuzzy_cmeans_female$size
 fuzzy_silh_scores_f <- silhouette(fuzzy_cluster_f, dist(female_processed[,5:12]))
 
 summary(fuzzy_silh_scores_f)
+
+# Calculate WSS for each cluster and total WSS for female dataset
+# Extract cluster centers
+centers <- fuzzy_cmeans_female$centers
+
+# Extract cluster assignments
+cluster_assignments <- fuzzy_cmeans_female$cluster
+
+# Calculate WSS for each cluster
+wss_per_cluster <- numeric(cl)
+for (k in 1:cl) {
+  cluster_data <- female_processed[cluster_assignments == k, 5:12]
+  center <- centers[k, ]
+  wss_per_cluster[k] <- sum(rowSums((cluster_data - center) ^ 2))
+}
+
+# Calculate total WSS
+total_wss <- sum(wss_per_cluster)
+
+# Print WSS for each cluster and the total WSS
+print("WSS for each cluster:")
+print(wss_per_cluster)
+print("Total WSS:")
+print(total_wss)
+
+
 ```
 ```{r}
 # Calculate WSS for each cluster
@@ -486,6 +721,7 @@ cat("Total WSS:", total_wss_f, "\n")
 #### fuzzy c-means male results
 
 ```{r}
+set.seed(555)
 # perform fuzzy k means (soft clustering)
 fuzzy_cmeans_male <- cmeans(male_processed[, 5:12], centers = cl, m = 2, iter.max = 100)
 #summary(fuzzy_cmeans_male)
@@ -512,6 +748,30 @@ fuzzy_cmeans_male$size
 fuzzy_silh_scores_m <- silhouette(fuzzy_cluster_m, dist(male_processed[,5:12]))
 
 summary(fuzzy_silh_scores_m)
+
+# Calculate WSS for each cluster and total WSS for female dataset
+# Extract cluster centers
+centers <- fuzzy_cmeans_male$centers
+
+# Extract cluster assignments
+cluster_assignments <- fuzzy_cmeans_male$cluster
+
+# Calculate WSS for each cluster
+wss_per_cluster <- numeric(cl)
+for (k in 1:cl) {
+  cluster_data <- male_processed[cluster_assignments == k, 5:12]
+  center <- centers[k, ]
+  wss_per_cluster[k] <- sum(rowSums((cluster_data - center) ^ 2))
+}
+
+# Calculate total WSS
+total_wss <- sum(wss_per_cluster)
+
+# Print WSS for each cluster and the total WSS
+print("WSS for each cluster:")
+print(wss_per_cluster)
+print("Total WSS:")
+print(total_wss)
 
 
 ```
@@ -602,22 +862,22 @@ male_processed_no_scale_log$cluster <- renamed_clusters_m[kmeans_m$cluster]
 
 # write aggregated data to xlsx
 
-write.xlsx(female_xlsx_mean_k3, file = "kmeans_female_mean_k3.xlsx")
-write.xlsx(male_xlsx_mean_k3, file = "kmeans_male_mean_k3.xlsx")
+write.xlsx(female_xlsx_mean_k3, file = "kmeans_female_mean_k3_1506.xlsx")
+write.xlsx(male_xlsx_mean_k3, file = "kmeans_male_mean_k3_1506.xlsx")
 
 # write aggregated data to xlsx
 female_xlsx_mean_c3 <- aggregate(female_processed_no_scale_log[,5:12], by = list(cluster = fuzzy_cmeans_female$cluster), mean)
-write.xlsx(female_xlsx_mean_c3, file = "cmeans_female_mean_c3.xlsx")
+write.xlsx(female_xlsx_mean_c3, file = "cmeans_female_mean_c3_1506.xlsx")
 
 male_xlsx_mean_c3 <- aggregate(male_processed_no_scale_log[,5:12], by = list(cluster = fuzzy_cmeans_male$cluster), mean)
-write.xlsx(male_xlsx_mean_c3, file = "cmeans_male_mean_c3.xlsx")
+write.xlsx(male_xlsx_mean_c3, file = "cmeans_male_mean_c3_1506.xlsx")
 
 # Remove the last column from the data frames
 female_final <- female_processed_no_scale_log[, -c(ncol(female_processed_no_scale_log) - 1, ncol(female_processed_no_scale_log) - 2)]
 male_final <- male_processed_no_scale_log[, -c(ncol(male_processed_no_scale_log) - 1, ncol(male_processed_no_scale_log) - 2)]
 
-write.xlsx(female_final, file = "female_final.xlsx", rowNames = FALSE)
-write.xlsx(male_final, file = "male_final.xlsx", rowNames = FALSE)
+#write.xlsx(female_final, file = "female_final.xlsx", rowNames = FALSE)
+#write.xlsx(male_final, file = "male_final.xlsx", rowNames = FALSE)
 ```
 
 # Summarize data
@@ -692,44 +952,107 @@ pca_m_df$cmeans <- fuzzy_cmeans_male$cluster
 
 ```{r}
 # Plotting the first two principal components
-ggplot(pca_f_df, aes(x = PC1, y = PC2, color = factor(kmeans))) +
+PCA_female_kmeans <- ggplot(pca_f_df, aes(x = PC1, y = PC2, color = factor(kmeans))) +
   geom_point(size = 2) +
   labs(title = "PCA of Female Data with kmeans clusters",
        x = "Principal Component 1",
        y = "Principal Component 2",
        color = "Cluster") +
+  scale_color_brewer(palette="Set2") +
   theme_minimal()
+PCA_female_kmeans
+ggsave("PCA_female_kmeans.png", plot = PCA_female_kmeans, width = 8, height = 6)
+```
+```{r}
+# Plotting the first two principal components
+PCA_female_kmeans <- ggplot(pca_f_df, aes(x = PC1, y = PC2, color = factor(kmeans))) +
+  geom_point(size = 2) +
+  labs(title = "PCA of Female Data with kmeans clusters",
+       x = "Principal Component 1",
+       y = "Principal Component 2",
+       color = "Cluster") +
+    scale_color_brewer(palette="Set2") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 20, face = "bold"),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 16),
+    legend.text = element_text(size = 14)
+  )
+
+# Display the plot
+PCA_female_kmeans
+
+# Save the plot with the specified dimensions
+ggsave("PCA_female_kmeans3.png", plot = PCA_female_kmeans, width = 8, height = 6)
 ```
 
 ```{r}
 # Plotting the first two principal components
-ggplot(pca_f_df, aes(x = PC1, y = PC2, color = factor(cmeans))) +
+PCA_female_cmeans <- ggplot(pca_f_df, aes(x = PC1, y = PC2, color = factor(cmeans))) +
   geom_point(size = 2) +
   labs(title = "PCA of Female Data with c-means clusters",
        x = "Principal Component 1",
        y = "Principal Component 2",
        color = "Cluster") +
-  theme_minimal()
+    scale_color_brewer(palette="Set2") +
+  theme_minimal()+
+  theme(
+    plot.title = element_text(size = 20, face = "bold"),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 16),
+    legend.text = element_text(size = 14))
+PCA_female_cmeans
+ggsave("PCA_female_cmeans.png", plot = PCA_female_cmeans, width = 8, height = 6)
 ```
 
 ```{r}
 # Plotting the first two principal components
-ggplot(pca_m_df, aes(x = PC1, y = PC2, color = factor(kmeans))) +
+PCA_male_kmeans <- ggplot(pca_m_df, aes(x = PC1, y = PC2, color = factor(kmeans))) +
   geom_point(size = 2) +
   labs(title = "PCA of Male Data with kmeans clusters",
        x = "Principal Component 1",
        y = "Principal Component 2",
        color = "Cluster") +
-  theme_minimal()
+    scale_color_brewer(palette="Set2") +
+  theme_minimal()+
+  theme(
+    plot.title = element_text(size = 20, face = "bold"),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 16),
+    legend.text = element_text(size = 14))
+PCA_male_kmeans
+ggsave("PCA_male_kmeans.png", plot = PCA_male_kmeans, width = 8, height = 6)
 ```
 
 ```{r}
 # Plotting the first two principal components
-ggplot(pca_m_df, aes(x = PC1, y = PC2, color = factor(cmeans))) +
+PCA_male_cmeans <- ggplot(pca_m_df, aes(x = PC1, y = PC2, color = factor(cmeans))) +
   geom_point(size = 2) +
   labs(title = "PCA of Male Data with c-means clusters",
        x = "Principal Component 1",
        y = "Principal Component 2",
        color = "Cluster") +
-  theme_minimal()
+    scale_color_brewer(palette="Set2") +
+  theme_minimal()+
+  theme(
+    plot.title = element_text(size = 20, face = "bold"),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 16),
+    legend.text = element_text(size = 14))
+
+PCA_male_cmeans
+ggsave("PCA_male_cmeans.png", plot = PCA_male_cmeans, width = 8, height = 6)
 ```
