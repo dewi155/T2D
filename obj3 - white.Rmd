@@ -1,0 +1,1314 @@
+---
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+# Load Library
+
+```{r library}
+library(readxl)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(openxlsx) 
+library(stats)
+library(kableExtra)
+library(pROC)
+library(regclass)
+library(caret)
+library(forcats)
+library(randomForest)
+library(MASS)
+library(splines)
+library(broom)
+library(scales)
+```
+
+# Read data
+
+```{r data, warning=FALSE}
+data <- suppressMessages(read_xlsx(path = "../Objective1/data_master_project_3years.xlsx"))
+colnames(data) <- gsub(" ", "_", colnames(data))
+load("../Objective2/female.Rdata")
+female_obj3 <- female
+male_obj3 <- load("../Objective2/male.Rdata")
+male_obj3 <- male
+```
+
+variables:
+
+\* 187 Volume of brain, grey+white matter (normalised for head size)
+
+\* 189 Volume of white matter (normalised for head size) \* 191 Volume
+of grey matter (normalised for head size)
+
+\* 193 Volume of peripheral cortical grey matter (normalised for head
+size)
+
+\* 196 Total volume of white matter hyperintensities (from T1 and
+T2_FLAIR images)
+
+\* 197 Volume of Whole-hippocampus (left hemisphere)
+
+\* 198 Volume of hippocampus (left)
+
+\* 200 Volume of hippocampus (right)
+
+\* 202 Volume of Hippocampus (left hemisphere)
+
+\* 204 Volume of Hippocampus (right hemisphere)
+
+\* 264 Plasma Amyloid beta-40
+
+\* 266 Plasma Amyloid beta-42
+
+\* 268 Plasma Glial fibrillary acidic protein
+
+\* 270 Plasma NeuroFilament Light
+
+\* 272 Plasma pTau-181
+
+\* 300 Standard PRS for type 2 diabetes (T2D)
+
+\* 274 Depression (F32.0-F33.9 including F32 and F33)
+
+\* 274 Chronic Kidney disease (N18-N18.9)
+
+\* Hyperlipedemia: (OR)
+
+-   TC \> 5.2 mmol/L
+
+<!-- -->
+
+-   LDL \> 2.6 mmol/L
+
+<!-- -->
+
+-   HDL \< 1.0 mmol/L (male)
+
+<!-- -->
+
+-   HDL \< 1.3 mmol/L (female) - TG \> 1.7 mmol/L
+
+```{r sup, eval=FALSE}
+
+obj3_var <- data[, c(1,189, 191, 300)]
+
+# Create the new column in the obj3_var dataframe to check if Depression (F32.0-F33.9 including F32 and F33) is present in ICD10
+obj3_var$Depression <- apply(data, 1, function(row) {
+  icd10 <- grepl("\\bF32(\\.\\d)?\\b|\\bF33(\\.\\d)?\\b", row[274])
+  return(icd10)
+})
+
+# Create the new column in the obj3_var dataframe to check if Kidney disease (N18) is present in ICD10
+obj3_var$Kidney_disease <- apply(data, 1, function(row) {
+  icd10 <- grepl("\\bN18(\\.\\d)?\\b", row[274])
+  return(icd10)
+})
+
+obj3_var <- obj3_var %>% rename(PRS = "Standard_PRS_for_type_2_diabetes_(T2D)")
+
+obj3_var <- obj3_var %>% rename(Volume_white_normalised = "Volume_of_white_matter_(normalised_for_head_size)")
+
+obj3_var <- obj3_var %>% rename(Volume_grey_normalised = "Volume_of_grey_matter_(normalised_for_head_size)")
+```
+
+# merging data
+
+```{r hyperlipidemia}
+# Create the new column in the female_obj3 dataframe to check for Hyperlipidemia
+female_obj3$Hyperlipidemia <- apply(female_obj3, 1, function(row) {
+  tc <- row["Cholesterol"] > 5.2
+  ldl <- row["LDL"] > 2.6
+  hdl <- row["HDL"] < 1.3
+  tg <- row["Triglycerides"] > 1.7
+  
+  return(tc | ldl | hdl | tg)
+})
+
+
+male_obj3$Hyperlipidemia <- apply(male_obj3, 1, function(row) {
+  tc <- row["Cholesterol"] > 5.2
+  ldl <- row["LDL"] > 2.6
+  hdl <- row["HDL"] < 1.0
+  tg <- row["Triglycerides"] > 1.7
+  
+  return(tc | ldl | hdl | tg)
+})
+
+female_obj3 <- merge(female_obj3, obj3_var[, c("...1", "Volume_grey_normalised")],
+                     by.x = "ID", by.y = "...1")
+
+female_obj3 <- merge(female_obj3, obj3_var[, c("...1", "Volume_white_normalised")],
+                     by.x = "ID", by.y = "...1")
+
+summary(female_obj3)
+
+male_obj3 <- merge(male_obj3, obj3_var[, c("...1", "Volume_grey_normalised")],
+                     by.x = "ID", by.y = "...1")
+
+male_obj3 <- merge(male_obj3, obj3_var[, c("...1", "Volume_white_normalised")],
+                     by.x = "ID", by.y = "...1")
+
+summary(male_obj3)
+```
+
+
+#export data
+
+```{r export, eval=FALSE}
+# export female
+write.xlsx(female_obj3, file = "female_obj3.xlsx", rowNames = FALSE)
+
+# export male
+write.xlsx(male_obj3, file = "male_obj3.xlsx", rowNames = FALSE)
+```
+
+# Regression
+
+1 Base Model (Unadjusted):
+
+-   Model 1: Assess the association between the T2D clusters and the
+    outcome (dementia all types) without adjusting for confounders.
+
+2 Demographic and Lifestyle Adjustments:
+
+-   Model 2: Model 1 plus demographic factors (age, education,
+    socioeconomic status) and lifestyle factors (smoking, alcohol
+    consumption, physical activity, diet).
+
+3 Health and Medication Adjustments:
+
+-   Model 3: Model 2 plus health-related factors at baseline:
+    cardiovascular risk factors (hypertension and hyperlipidemia),
+    medications (glucose-lowering, blood pressure-lowering, and
+    lipid-lowering medications), and comorbidities (cardiovascular
+    diseases, depression, and chronic kidney disease).
+
+4 Genetic Factors:
+
+-   Model 4: Model 3 plus polygenic risk score (PRS) for T2D.
+
+## Linear regression assumptions
+1. Linearity (Use scatter plots and partial regression plots)
+Assumption: The relationship between the independent variables and the mean of the dependent variable is linear.
+Implication for Variables:
+Continuous Variables: There should be a linear relationship between each continuous independent variable and the dependent variable. This can be checked using scatter plots.
+Categorical Variables: This applies similarly as the model estimates the effect of different categories via shifts in the intercept.
+2. Independence of Errors (Analyze the context and design of the data collection; use Durbin-Watson statistic to check for autocorrelation)
+Assumption: Observations are independent of each other, and the residuals (errors) from the regression should also be independent.
+Implication for All Variables: There should be no correlation between the residuals. This is crucial in time-series data or clustered data where observations might not be independent.
+3. Homoscedasticity (Equal Variance) (Plot residuals against fitted values)
+Assumption: The variance of error terms (residuals) is consistent across all levels of the independent variables, meaning the residuals are equally spread throughout the range of predicted values.
+Implication for Variables:
+Continuous Variables: Look for patterns in residual plots (e.g., residuals should not increase or decrease with the fitted values).
+Categorical Variables: Variance in groups defined by categorical variables should be similar.
+4. Normality of Residuals (Use Q-Q plots and Shapiro-Wilk tests on residuals)
+Assumption: The residuals of the model are normally distributed.
+General Implication: This is more about the residuals themselves rather than the distribution of the variables. However, severe non-normality in predictors, especially in small samples, can affect the normality of residuals.
+5. No Multicollinearity (Use Variance Inflation Factor (VIF) to check for multicollinearity among predictors)
+Assumption: Independent variables should not be too highly correlated.
+Implication for Variables:
+Continuous Variables: High correlation (multicollinearity) among continuous variables can make it difficult to determine the individual effect of each variable.
+Categorical Variables: Dummy variable trap (a situation where variables are highly correlated due to the inclusion of dummy variables for categorical predictors) needs to be avoided by dropping one category.
+
+Prefer not to answer to NA for analysis, as we dont want these in the model.
+
+```{r prefer_not_to_answer}
+
+summary(female_obj3)
+
+```
+
+```{r hist_f}
+# Histogram for age_at_diagnosis
+hist(female_obj3$age_at_diagnosis, 
+     main = "Histogram of Age at Diagnosis",
+     xlab = "Age",
+     col = "skyblue",
+     border = "black")
+
+# Histogram for Townsend_deprivation_index_at_recruitment
+hist(female_obj3$Townsend_deprivation_index_at_recruitment,
+     main = "Histogram of Townsend Deprivation Index",
+     xlab = "Townsend Deprivation Index",
+     col = "lightgreen",
+     border = "black")
+
+# Histogram for Summed_MET_minutes_per_week_for_all_activity
+hist(female_obj3$Summed_MET_minutes_per_week_for_all_activity,
+     main = "Histogram of Summed MET Minutes per Week",
+     xlab = "MET Minutes per Week",
+     col = "salmon",
+     border = "black")
+
+# Histogram for Summed_MET_minutes_per_week_for_all_activity
+hist(female_obj3$PRS,
+     main = "Histogram of PRS diabetes",
+     xlab = "PRS",
+     col = "Yellow",
+     border = "black")
+
+```
+
+```{r hist_m}
+
+# Histogram for age_at_diagnosis
+hist(male_obj3$age_at_diagnosis, 
+     main = "Histogram of Age at Diagnosis",
+     xlab = "Age",
+     col = "skyblue",
+     border = "black")
+
+# Histogram for Townsend_deprivation_index_at_recruitment
+hist(male_obj3$Townsend_deprivation_index_at_recruitment,
+     main = "Histogram of Townsend Deprivation Index",
+     xlab = "Townsend Deprivation Index",
+     col = "lightgreen",
+     border = "black")
+
+# Histogram for Summed_MET_minutes_per_week_for_all_activity
+hist(male_obj3$Summed_MET_minutes_per_week_for_all_activity,
+     main = "Histogram of Summed MET Minutes per Week",
+     xlab = "MET Minutes per Week",
+     col = "salmon",
+     border = "black")
+
+# Histogram for Summed_MET_minutes_per_week_for_all_activity
+hist(male_obj3$PRS,
+     main = "Histogram of PRS diabetes",
+     xlab = "PRS",
+     col = "Yellow",
+     border = "black")
+
+
+```
+
+
+
+
+## Model 1
+
+###Split model1
+```{r split1}
+# Split the dataset into training and testing sets
+set.seed(123)  # For reproducibility
+
+# Select relevant variables
+relevant_vars_1 <- c("Volume_white_normalised", "cluster")
+
+# Subset the female dataframe to include only the relevant variables
+female_obj3_1 <- female_obj3[, relevant_vars_1]
+
+# Remove rows with any NA values
+female_obj3_1 <- na.omit(female_obj3_1)
+
+
+# Split female data
+train_indices_f1 <- createDataPartition(female_obj3_1$Volume_white_normalised, p = 0.8, list = FALSE)
+train_female_obj3_1 <- female_obj3_1[train_indices_f1, ]
+test_female_obj3_1 <- female_obj3_1[-train_indices_f1, ]
+
+# Subset the female dataframe to include only the relevant variables
+male_obj3_1 <- male_obj3[, relevant_vars_1]
+
+# Remove rows with any NA values
+male_obj3_1 <- na.omit(male_obj3_1)
+
+# Split male data
+train_indices_m1 <- createDataPartition(male_obj3_1$Volume_white_normalised, p = 0.8, list = FALSE)
+train_male_obj3_1 <- male_obj3_1[train_indices_m1, ]
+test_male_obj3_1 <- male_obj3_1[-train_indices_m1, ]
+```
+
+```{r}
+# Generate a count table using dplyr
+cluster_table <- female_obj3_1 %>%
+  group_by(cluster) %>%
+  summarise(Count = n(), .groups = 'drop')
+
+# Print the result
+print(cluster_table)
+# Create a bar plot of cluster counts
+ggplot(female_obj3_1, aes(x = cluster)) +
+  geom_bar(fill = "steelblue") +
+  labs(title = "Distribution of Clusters female", x = "Cluster", y = "Count") +
+  theme_minimal()
+```
+```{r}
+# Generate a count table using dplyr
+cluster_table <- male_obj3_1 %>%
+  group_by(cluster) %>%
+  summarise(Count = n(), .groups = 'drop')
+
+# Print the result
+print(cluster_table)
+# Create a bar plot of cluster counts
+ggplot(male_obj3_1, aes(x = cluster)) +
+  geom_bar(fill = "steelblue") +
+  labs(title = "Distribution of Clusters male", x = "Cluster", y = "Count") +
+  theme_minimal()
+```
+## Model 1: Base Model (Unadjusted)
+
+### Model 1 female
+```{r model1_f}
+# Adjust the baseline level for the 'cluster' variable
+train_female_obj3_1$cluster <- relevel(train_female_obj3_1$cluster, ref = "Age-related")
+
+# Model 1: Base Model (Unadjusted)
+model1_f_white <- lm(Volume_white_normalised ~ cluster, data = train_female_obj3_1)
+summary(model1_f_white)
+
+# Make predictions on the testing data
+predictions_model1_f_white<- predict(model1_f_white, newdata = test_female_obj3_1)
+
+
+# Calculate Mean Absolute Error (MAE)
+mae <- mean(abs(predictions_model1_f_white - test_female_obj3_1$Volume_white_normalised))
+cat("Mean Absolute Error (MAE):", mae, "\n")
+
+# Calculate Root Mean Squared Error (RMSE)
+rmse <- sqrt(mean((predictions_model1_f_white - test_female_obj3_1$Volume_white_normalised)^2))
+cat("Root Mean Squared Error (RMSE):", rmse, "\n")
+
+# Calculate AIC and BIC for the model
+model1_f_white_aic <- AIC(model1_f_white)
+model1_f_white_bic <- BIC(model1_f_white)
+
+# Print the results
+cat("AIC for the model1_f_white:", model1_f_white_aic, "\n")
+cat("BIC for the model1_f_white:", model1_f_white_bic, "\n")
+
+# Plot predictions vs actual values
+plot(test_female_obj3_1$Volume_white_normalised, predictions_model1_f_white,
+     xlab = "Actual Values", ylab = "Predicted Values", main = "Predicted vs Actual Values")
+abline(0, 1, col = "red")  # Line for perfect prediction
+```
+
+```{r plot_model1_f}
+
+par(mfrow = c(2, 2))
+
+plot(model1_f_white)
+
+```
+
+
+### Model 1 male
+```{r model1_m}
+set.seed(5)
+# Adjust the baseline level for the 'cluster' variable
+train_male_obj3_1$cluster <- relevel(train_male_obj3_1$cluster, ref = "Age-related")
+
+# Model 1: Base Model (Unadjusted)
+model1_m_white <- lm(Volume_white_normalised ~ cluster, data = train_male_obj3_1)
+summary(model1_m_white)
+
+# Make predictions on the testing data
+predictions_model1_m_white<- predict(model1_m_white, newdata = test_male_obj3_1)
+
+
+# Calculate Mean Absolute Error (MAE)
+mae <- mean(abs(predictions_model1_m_white - test_male_obj3_1$Volume_white_normalised))
+cat("Mean Absolute Error (MAE):", mae, "\n")
+
+# Calculate Root Mean Squared Error (RMSE)
+rmse <- sqrt(mean((predictions_model1_m_white - test_male_obj3_1$Volume_white_normalised)^2))
+cat("Root Mean Squared Error (RMSE):", rmse, "\n")
+
+# Calculate AIC and BIC for the model
+model1_m_white_aic <- AIC(model1_m_white)
+model1_m_white_bic <- BIC(model1_m_white)
+
+# Print the results
+cat("AIC for the model1_m_white:", model1_m_white_aic, "\n")
+cat("BIC for the model1_m_white:", model1_m_white_bic, "\n")
+
+# Plot predictions vs actual values
+plot(test_male_obj3_1$Volume_white_normalised, predictions_model1_m_white,
+     xlab = "Actual Values", ylab = "Predicted Values", main = "Predicted vs Actual Values")
+abline(0, 1, col = "red")  # Line for perfect prediction
+```
+
+```{r plot_model1_m}
+par(mfrow = c(2, 2))
+plot(model1_m_white)
+```
+
+
+## Model 2: Demographic and Lifestyle Adjustments
+###Split model2
+```{r split_model2}
+# Set seed for reproducibility
+set.seed(123)
+
+# Select relevant variables
+relevant_vars_2 <- c("Volume_white_normalised", "cluster", "age_at_diagnosis", 
+                     "Qualification_", "Townsend_deprivation_index_at_recruitment", 
+                     "Smoking_ever", "Drinking_ever", "Summed_MET_minutes_per_week_for_all_activity")
+
+
+# Subset the female dataframe to include only the relevant variables
+female_obj3_2 <- female_obj3[, relevant_vars_2]
+
+# Remove rows with any NA values
+female_obj3_2 <- na.omit(female_obj3_2)
+
+
+# Split female data
+train_indices_f2 <- createDataPartition(female_obj3_2$Volume_white_normalised, p = 0.8, list = FALSE)
+train_female_obj3_2 <- female_obj3_2[train_indices_f2, ]
+test_female_obj3_2 <- female_obj3_2[-train_indices_f2, ]
+
+# Subset the female dataframe to include only the relevant variables
+male_obj3_2 <- male_obj3[, relevant_vars_2]
+
+# Remove rows with any NA values
+male_obj3_2 <- na.omit(male_obj3_2)
+
+# Split male data
+train_indices_m2 <- createDataPartition(male_obj3_2$Volume_white_normalised, p = 0.8, list = FALSE)
+train_male_obj3_2 <- male_obj3_2[train_indices_m2, ]
+test_male_obj3_2 <- male_obj3_2[-train_indices_m2, ]
+
+```
+
+
+### Model 2 female
+```{r model2_f}
+set.seed(5)
+# Define the model formula
+model_formula2 <- Volume_white_normalised ~ cluster + ns(age_at_diagnosis, df = 3) + Qualification_ + ns(Townsend_deprivation_index_at_recruitment, df =3) + Smoking_ever + Drinking_ever + ns(Summed_MET_minutes_per_week_for_all_activity, df=3)
+
+# Adjust the baseline level for the 'cluster' variable
+train_female_obj3_2$cluster <- relevel(train_female_obj3_2$cluster, ref = "Age-related")
+
+# Model 2 female
+model2_f_white <- lm(model_formula2, data = train_female_obj3_2)
+summary(model2_f_white)
+
+# Make predictions on the testing data
+predictions_model2_f_white<- predict(model2_f_white, newdata = test_female_obj3_2)
+
+
+# Calculate Mean Absolute Error (MAE)
+mae <- mean(abs(predictions_model2_f_white - test_female_obj3_2$Volume_white_normalised))
+cat("Mean Absolute Error (MAE):", mae, "\n")
+
+# Calculate Root Mean Squared Error (RMSE)
+rmse <- sqrt(mean((predictions_model2_f_white - test_female_obj3_2$Volume_white_normalised)^2))
+cat("Root Mean Squared Error (RMSE):", rmse, "\n")
+
+# Calculate AIC and BIC for the model
+model2_f_white_aic <- AIC(model2_f_white)
+model2_f_white_bic <- BIC(model2_f_white)
+
+# Print the results
+cat("AIC for the model2_f_white:", model2_f_white_aic, "\n")
+cat("BIC for the model2_f_white:", model2_f_white_bic, "\n")
+
+# Plot predictions vs actual values
+plot(test_female_obj3_2$Volume_white_normalised, predictions_model2_f_white,
+     xlab = "Actual Values", ylab = "Predicted Values", main = "Predicted vs Actual Values")
+abline(0, 1, col = "red")  # Line for perfect prediction
+
+```
+
+```{r plot_model2_f}
+par(mfrow = c(2, 2))
+
+plot(model2_f_white)
+```
+
+
+```{r}
+# Load necessary libraries
+library(splines)
+library(MASS)  # for rlm function
+library(ggplot2)
+
+# Set seed for reproducibility
+set.seed(5)
+
+# Fit the spline model with ns-splines (degree = 3)
+spline_model <- lm(Volume_white_normalised ~ ns(age_at_diagnosis, df = 3), data = train_female_obj3_2)
+summary(spline_model)
+
+# Create a grid for prediction
+age_grid <- seq(min(train_female_obj3_2$age_at_diagnosis), max(train_female_obj3_2$age_at_diagnosis), length.out = 100)
+
+# Make predictions
+preds <- predict(spline_model, newdata = data.frame(age_at_diagnosis = age_grid), se.fit = TRUE)
+preds_df <- data.frame(age_at_diagnosis = age_grid, fit = preds$fit, upper = preds$fit + 2 * preds$se.fit, lower = preds$fit - 2 * preds$se.fit)
+
+# Create a custom label function
+format_scientific <- function(x) {
+  parse(text = gsub("e\\+*", " %*% 10^", scales::scientific_format()(x)))
+}
+
+
+# Assuming train_female_obj3_2 is your training data and preds_df contains predictions
+# Ensure preds_df has columns 'fit', 'upper', and 'lower' for predicted values and confidence intervals
+
+# Plot the original data points and the spline curve with confidence intervals
+ggplot(train_female_obj3_2, aes(x = age_at_diagnosis, y = Volume_white_normalised)) +
+  geom_point(alpha = 0.3, aes(color = "Observed Data")) +
+  geom_line(data = preds_df, aes(x = age_at_diagnosis, y = fit, color = "Predicted Line"), size = 1) +
+  geom_line(data = preds_df, aes(x = age_at_diagnosis, y = upper, color = "Confidence Interval"), linetype = "dashed") +
+  geom_line(data = preds_df, aes(x = age_at_diagnosis, y = lower, color = "Confidence Interval"), linetype = "dashed") +
+  scale_color_manual(values = c("Observed Data" = "black", "Predicted Line" = "blue", "Confidence Interval" = "blue")) +
+  labs(title = "Female: Natural Spline Transformation for Age at Diagnosis",
+       x = "Age at Diagnosis",
+       y = "Volume (White Normalised)",
+       color = "Legend") +
+  theme_minimal() +
+  scale_y_continuous(labels = format_scientific)+
+  theme(legend.position = "bottom")  # Move legend to the bottom
+
+```
+```{r}
+# Set seed for reproducibility
+set.seed(5)
+
+# Fit the spline model with ns-splines (degree = 3) for males
+spline_model <- lm(Volume_white_normalised ~ ns(Townsend_deprivation_index_at_recruitment, df = 3), data = train_male_obj3_2)
+summary(spline_model)
+
+# Create a grid for prediction
+townsend_grid <- seq(min(train_male_obj3_2$Townsend_deprivation_index_at_recruitment), max(train_male_obj3_2$Townsend_deprivation_index_at_recruitment), length.out = 100)
+
+# Make predictions
+preds <- predict(spline_model, newdata = data.frame(Townsend_deprivation_index_at_recruitment = townsend_grid), se.fit = TRUE)
+preds_df <- data.frame(Townsend_deprivation_index_at_recruitment = townsend_grid, fit = preds$fit, upper = preds$fit + 2 * preds$se.fit, lower = preds$fit - 2 * preds$se.fit)
+
+# Plot the original data points and the spline curve with confidence intervals for males
+ggplot(train_male_obj3_2, aes(x = Townsend_deprivation_index_at_recruitment, y = Volume_white_normalised)) +
+  geom_point(alpha = 0.3, aes(color = "Observed Data")) +
+  geom_line(data = preds_df, aes(x = Townsend_deprivation_index_at_recruitment, y = fit, color = "Predicted Line"), size = 1) +
+  geom_line(data = preds_df, aes(x = Townsend_deprivation_index_at_recruitment, y = upper, color = "Confidence Interval"), linetype = "dashed") +
+  geom_line(data = preds_df, aes(x = Townsend_deprivation_index_at_recruitment, y = lower, color = "Confidence Interval"), linetype = "dashed") +
+  scale_color_manual(values = c("Observed Data" = "black", "Predicted Line" = "blue", "Confidence Interval" = "blue")) +
+  labs(title = "Male: Natural Spline Transformation for Townsend deprivation index",
+       x = "Townsend deprivation index",
+       y = "Volume (White Normalised)",
+       color = "Legend") +
+  theme_minimal() +
+  scale_y_continuous(labels = format_scientific) +
+  theme(legend.position = "bottom")  # Move legend to the bottom
+
+```
+
+
+```{r}
+# Set seed for reproducibility
+set.seed(5)
+
+# Fit the spline model with ns-splines (degree = 3)
+spline_model <- lm(Volume_white_normalised ~ ns(Townsend_deprivation_index_at_recruitment, df = 3), data = train_female_obj3_2)
+summary(spline_model)
+
+# Create a grid for prediction
+townsend_grid <- seq(min(train_female_obj3_2$Townsend_deprivation_index_at_recruitment), max(train_female_obj3_2$Townsend_deprivation_index_at_recruitment), length.out = 100)
+
+# Make predictions
+preds <- predict(spline_model, newdata = data.frame(Townsend_deprivation_index_at_recruitment = townsend_grid), se.fit = TRUE)
+preds_df <- data.frame(Townsend_deprivation_index_at_recruitment = townsend_grid, fit = preds$fit, upper = preds$fit + 2 * preds$se.fit, lower = preds$fit - 2 * preds$se.fit)
+
+# Ensure preds_df has columns 'fit', 'upper', and 'lower' for predicted values and confidence intervals
+
+# Plot the original data points and the spline curve with confidence intervals
+ggplot(train_female_obj3_2, aes(x = Townsend_deprivation_index_at_recruitment, y = Volume_white_normalised)) +
+  geom_point(alpha = 0.3, aes(color = "Observed Data")) +
+  geom_line(data = preds_df, aes(x = Townsend_deprivation_index_at_recruitment, y = fit, color = "Predicted Line"), size = 1) +
+  geom_line(data = preds_df, aes(x = Townsend_deprivation_index_at_recruitment, y = upper, color = "Confidence Interval"), linetype = "dashed") +
+  geom_line(data = preds_df, aes(x = Townsend_deprivation_index_at_recruitment, y = lower, color = "Confidence Interval"), linetype = "dashed") +
+  scale_color_manual(values = c("Observed Data" = "black", "Predicted Line" = "blue", "Confidence Interval" = "blue")) +
+  labs(title = "Female: Natural Spline Transformation for Townsend deprivation index",
+       x = "Townsend deprevation index",
+       y = "Volume (White Normalised)",
+       color = "Legend") +
+  theme_minimal() +
+  scale_y_continuous(labels = format_scientific)+
+  theme(legend.position = "bottom")  # Move legend to the bottom
+
+```
+```{r}
+# Set seed for reproducibility
+set.seed(5)
+
+# Fit the spline model with ns-splines (degree = 3)
+spline_model <- lm(Volume_white_normalised ~ ns(Summed_MET_minutes_per_week_for_all_activity, df = 3), data = train_female_obj3_2)
+summary(spline_model)
+
+# Create a grid for prediction
+met_grid <- seq(min(train_female_obj3_2$Summed_MET_minutes_per_week_for_all_activity), max(train_female_obj3_2$Summed_MET_minutes_per_week_for_all_activity), length.out = 100)
+
+# Make predictions
+preds <- predict(spline_model, newdata = data.frame(Summed_MET_minutes_per_week_for_all_activity = met_grid), se.fit = TRUE)
+preds_df <- data.frame(Summed_MET_minutes_per_week_for_all_activity = met_grid, fit = preds$fit, upper = preds$fit + 2 * preds$se.fit, lower = preds$fit - 2 * preds$se.fit)
+
+# Plot the original data points and the spline curve with confidence intervals
+ggplot(train_female_obj3_2, aes(x = Summed_MET_minutes_per_week_for_all_activity, y = Volume_white_normalised)) +
+  geom_point(alpha = 0.3, aes(color = "Observed Data")) +
+  geom_line(data = preds_df, aes(x = Summed_MET_minutes_per_week_for_all_activity, y = fit, color = "Predicted Line"), size = 1) +
+  geom_line(data = preds_df, aes(x = Summed_MET_minutes_per_week_for_all_activity, y = upper, color = "Confidence Interval"), linetype = "dashed") +
+  geom_line(data = preds_df, aes(x = Summed_MET_minutes_per_week_for_all_activity, y = lower, color = "Confidence Interval"), linetype = "dashed") +
+  scale_color_manual(values = c("Observed Data" = "black", "Predicted Line" = "blue", "Confidence Interval" = "blue")) +
+  labs(title = "Female: Natural Spline Transformation for Summed MET minutes per week",
+       x = "Summed MET minutes per week",
+       y = "Volume (White Normalised)",
+       color = "Legend") +
+  theme_minimal() +
+  scale_y_continuous(labels = format_scientific) +
+  theme(legend.position = "bottom")  # Move legend to the bottom
+
+```
+
+
+
+### Model 2 male
+```{r model2_m}
+set.seed(5)
+
+# Adjust the baseline level for the 'cluster' variable
+train_male_obj3_2$cluster <- relevel(train_male_obj3_2$cluster, ref = "Age-related")
+
+# Model 2 male
+model2_m_white <- lm(model_formula2, data = train_male_obj3_2)
+summary(model2_m_white)
+
+# Make predictions on the testing data
+predictions_model2_m_white<- predict(model2_m_white, newdata = test_male_obj3_2)
+
+
+# Calculate Mean Absolute Error (MAE)
+mae <- mean(abs(predictions_model2_m_white - test_male_obj3_2$Volume_white_normalised))
+cat("Mean Absolute Error (MAE):", mae, "\n")
+
+# Calculate Root Mean Squared Error (RMSE)
+rmse <- sqrt(mean((predictions_model2_m_white - test_male_obj3_2$Volume_white_normalised)^2))
+cat("Root Mean Squared Error (RMSE):", rmse, "\n")
+
+# Calculate AIC and BIC for the model
+model2_m_white_aic <- AIC(model2_m_white)
+model2_m_white_bic <- BIC(model2_m_white)
+
+# Print the results
+cat("AIC for the model2_m_white:", model2_m_white_aic, "\n")
+cat("BIC for the model2_m_white:", model2_m_white_bic, "\n")
+
+# Plot predictions vs actual values
+plot(test_male_obj3_2$Volume_white_normalised, predictions_model2_m_white,
+     xlab = "Actual Values", ylab = "Predicted Values", main = "Predicted vs Actual Values")
+abline(0, 1, col = "red")  # Line for perfect prediction
+
+
+```
+```{r plot_model2_m}
+par(mfrow=c(2,2))
+plot(model2_m_white)
+```
+```{r}
+# Set seed for reproducibility
+set.seed(5)
+
+# Fit the spline model with ns-splines (degree = 3) for males
+spline_model <- lm(Volume_white_normalised ~ ns(age_at_diagnosis, df = 3), data = train_male_obj3_2)
+summary(spline_model)
+
+# Create a grid for prediction
+age_grid <- seq(min(train_male_obj3_2$age_at_diagnosis), max(train_male_obj3_2$age_at_diagnosis), length.out = 100)
+
+# Make predictions
+preds <- predict(spline_model, newdata = data.frame(age_at_diagnosis = age_grid), se.fit = TRUE)
+preds_df <- data.frame(age_at_diagnosis = age_grid, fit = preds$fit, upper = preds$fit + 2 * preds$se.fit, lower = preds$fit - 2 * preds$se.fit)
+
+# Plot the original data points and the spline curve with confidence intervals for males
+ggplot(train_male_obj3_2, aes(x = age_at_diagnosis, y = Volume_white_normalised)) +
+  geom_point(alpha = 0.3, aes(color = "Observed Data")) +
+  geom_line(data = preds_df, aes(x = age_at_diagnosis, y = fit, color = "Predicted Line"), size = 1) +
+  geom_line(data = preds_df, aes(x = age_at_diagnosis, y = upper, color = "Confidence Interval"), linetype = "dashed") +
+  geom_line(data = preds_df, aes(x = age_at_diagnosis, y = lower, color = "Confidence Interval"), linetype = "dashed") +
+  scale_color_manual(values = c("Observed Data" = "black", "Predicted Line" = "blue", "Confidence Interval" = "blue")) +
+  labs(title = "Male: Natural Spline Transformation for Age at Diagnosis",
+       x = "Age at Diagnosis",
+       y = "Volume (White Normalised)",
+       color = "Legend") +
+  theme_minimal() +
+  scale_y_continuous(labels = format_scientific) +
+  theme(legend.position = "bottom")  # Move legend to the bottom
+
+```
+```{r}
+# Set seed for reproducibility
+set.seed(5)
+
+# Fit the spline model with ns-splines (degree = 3) for males
+spline_model <- lm(Volume_white_normalised ~ ns(Summed_MET_minutes_per_week_for_all_activity, df = 3), data = train_male_obj3_2)
+summary(spline_model)
+
+# Create a grid for prediction
+met_grid <- seq(min(train_male_obj3_2$Summed_MET_minutes_per_week_for_all_activity), max(train_male_obj3_2$Summed_MET_minutes_per_week_for_all_activity), length.out = 100)
+
+# Make predictions
+preds <- predict(spline_model, newdata = data.frame(Summed_MET_minutes_per_week_for_all_activity = met_grid), se.fit = TRUE)
+preds_df <- data.frame(Summed_MET_minutes_per_week_for_all_activity = met_grid, fit = preds$fit, upper = preds$fit + 2 * preds$se.fit, lower = preds$fit - 2 * preds$se.fit)
+
+# Plot the original data points and the spline curve with confidence intervals for males
+ggplot(train_male_obj3_2, aes(x = Summed_MET_minutes_per_week_for_all_activity, y = Volume_white_normalised)) +
+  geom_point(alpha = 0.3, aes(color = "Observed Data")) +
+  geom_line(data = preds_df, aes(x = Summed_MET_minutes_per_week_for_all_activity, y = fit, color = "Predicted Line"), size = 1) +
+  geom_line(data = preds_df, aes(x = Summed_MET_minutes_per_week_for_all_activity, y = upper, color = "Confidence Interval"), linetype = "dashed") +
+  geom_line(data = preds_df, aes(x = Summed_MET_minutes_per_week_for_all_activity, y = lower, color = "Confidence Interval"), linetype = "dashed") +
+  scale_color_manual(values = c("Observed Data" = "black", "Predicted Line" = "blue", "Confidence Interval" = "blue")) +
+  labs(title = "Male: Natural Spline Transformation for Summed MET minutes per week for all activity",
+       x = "Summed MET minutes per week",
+       y = "Volume (White Normalised)",
+       color = "Legend") +
+  theme_minimal() +
+  scale_y_continuous(labels = format_scientific) +
+  theme(legend.position = "bottom")  # Move legend to the bottom
+
+```
+
+
+## Model 3: Health and Medication Adjustments
+
+### Split model 3
+
+```{r split_model3}
+# Set seed for reproducibility
+set.seed(123)
+
+
+
+# Select relevant variables for model 3
+relevant_vars_3 <- c("Volume_white_normalised", "cluster", "age_at_diagnosis", 
+                     "Qualification_", "Townsend_deprivation_index_at_recruitment", 
+                     "Smoking_ever", "Drinking_ever", "Summed_MET_minutes_per_week_for_all_activity",
+                     "Hypertension", "Hyperlipidemia", "Insulin_medication", "Glucose_lowering_medication" , "Hypertension_medication", "Lipid_lowering_medication", "Coronary_heart_disease", "Depression", "Kidney_disease")
+
+# Split the dataset into training and testing sets
+
+# Subset the female dataframe to include only the relevant variables
+female_obj3_3 <- female_obj3[, relevant_vars_3]
+
+# Remove rows with any NA values
+female_obj3_3 <- na.omit(female_obj3_3)
+
+
+# Split female data
+train_indices_f3 <- createDataPartition(female_obj3_3$Volume_white_normalised, p = 0.8, list = FALSE)
+train_female_obj3_3 <- female_obj3_3[train_indices_f3, ]
+test_female_obj3_3 <- female_obj3_3[-train_indices_f3, ]
+
+# Subset the female dataframe to include only the relevant variables
+male_obj3_3 <- male_obj3[, relevant_vars_3]
+
+# Remove rows with any NA values
+male_obj3_3 <- na.omit(male_obj3_3)
+
+# Split male data
+train_indices_m3 <- createDataPartition(male_obj3_3$Volume_white_normalised, p = 0.8, list = FALSE)
+train_male_obj3_3 <- male_obj3_3[train_indices_m3, ]
+test_male_obj3_3 <- male_obj3_3[-train_indices_m3, ]
+```
+
+### Model 3 female
+```{r model3_f}
+# Model 3: Health and Medication Adjustments
+set.seed(5)
+# Define the model formula
+model_formula3 <- Volume_white_normalised ~ cluster + ns(age_at_diagnosis, df = 3) + Qualification_ + ns(Townsend_deprivation_index_at_recruitment, df =3) + Smoking_ever + Drinking_ever + ns(Summed_MET_minutes_per_week_for_all_activity, df=3) +
+              Hypertension + Hyperlipidemia + Insulin_medication + Glucose_lowering_medication + Hypertension_medication + Lipid_lowering_medication + Coronary_heart_disease + Depression + Kidney_disease
+
+# Adjust the baseline level for the 'cluster' variable
+train_female_obj3_3$cluster <- relevel(train_female_obj3_3$cluster, ref = "Age-related")
+
+# Model 3 female
+model3_f_white <- lm(model_formula3, data = train_female_obj3_3)
+summary(model3_f_white)
+
+# Make predictions on the testing data
+predictions_model3_f_white<- predict(model3_f_white, newdata = test_female_obj3_3)
+
+
+# Calculate Mean Absolute Error (MAE)
+mae <- mean(abs(predictions_model3_f_white - test_female_obj3_3$Volume_white_normalised))
+cat("Mean Absolute Error (MAE):", mae, "\n")
+
+# Calculate Root Mean Squared Error (RMSE)
+rmse <- sqrt(mean((predictions_model3_f_white - test_female_obj3_3$Volume_white_normalised)^2))
+cat("Root Mean Squared Error (RMSE):", rmse, "\n")
+
+# Calculate AIC and BIC for the non-spline model
+model3_f_white_aic <- AIC(model3_f_white)
+model3_f_white_bic <- BIC(model3_f_white)
+
+# Print the results
+cat("AIC for the model3_f_white:", model3_f_white_aic, "\n")
+cat("BIC for the model3_f_white:", model3_f_white_bic, "\n")
+
+# Plot predictions vs actual values
+plot(test_female_obj3_3$Volume_white_normalised, predictions_model3_f_white,
+     xlab = "Actual Values", ylab = "Predicted Values", main = "Predicted vs Actual Values")
+abline(0, 1, col = "red")  # Line for perfect prediction
+```
+```{r plot_model3_f}
+par(mfrow= c(2,2))
+plot(model3_f_white)
+```
+```{r}
+set.seed(5)
+
+# Fit the spline model with ns-splines (degree = 3)
+spline_model3f_white <- lm(Volume_white_normalised ~ ns(age_at_diagnosis, df = 3), data = train_female_obj3_3)
+summary(spline_model)
+
+# Create a grid for prediction
+age_grid <- seq(min(train_female_obj3_3$age_at_diagnosis), max(train_female_obj3_3$age_at_diagnosis), length.out = 100)
+# Make predictions for model3_f
+preds_model3 <- predict(spline_model3f_white, newdata = data.frame(age_at_diagnosis = age_grid), se.fit = TRUE)
+preds_df_model3 <- data.frame(age_at_diagnosis = age_grid, fit = preds_model3$fit, upper = preds_model3$fit + 2 * preds_model3$se.fit, lower = preds_model3$fit - 2 * preds_model3$se.fit)
+
+# Plot for model3_f
+plot_model3_white <- ggplot(train_female_obj3_3, aes(x = age_at_diagnosis, y = Volume_white_normalised)) +
+  geom_point(alpha = 0.3, aes(color = "Observed Data")) +
+  geom_line(data = preds_df_model3, aes(x = age_at_diagnosis, y = fit, color = "Predicted Line"), size = 1) +
+  geom_line(data = preds_df_model3, aes(x = age_at_diagnosis, y = upper, color = "Confidence Interval"), linetype = "dashed") +
+  geom_line(data = preds_df_model3, aes(x = age_at_diagnosis, y = lower, color = "Confidence Interval"), linetype = "dashed") +
+  scale_color_manual(values = c("Observed Data" = "black", "Predicted Line" = "blue", "Confidence Interval" = "blue")) +
+  labs(title = "Model3_f: Natural Spline Transformation for Age at Diagnosis",
+       x = "Age at Diagnosis",
+       y = "Volume (White Normalised)",
+       color = "Legend") +
+  theme_minimal() +
+  theme(legend.position = "bottom")  # Move legend to the bottom
+
+# Show plot for model3_f
+plot_model3_white
+
+```
+
+### Model 3 male
+
+```{r model3_m}
+# Model 3: Health and Medication Adjustments
+set.seed(5)
+
+# Adjust the baseline level for the 'cluster' variable
+train_male_obj3_3$cluster <- relevel(train_male_obj3_3$cluster, ref = "Age-related")
+
+model_formula3 <- Volume_white_normalised ~ cluster + ns(age_at_diagnosis, df = 3) + Qualification_ + ns(Townsend_deprivation_index_at_recruitment, df =3) + Smoking_ever + Drinking_ever + ns(Summed_MET_minutes_per_week_for_all_activity, df=3) +
+              Hypertension + Hyperlipidemia + Insulin_medication + Glucose_lowering_medication + Hypertension_medication + Lipid_lowering_medication + Coronary_heart_disease + Depression + Kidney_disease
+
+# Model 3 male
+model3_m_white <- lm(model_formula3, data = train_male_obj3_3)
+summary(model3_m_white)
+
+# Make predictions on the testing data
+predictions_model3_m_white<- predict(model3_m_white, newdata = test_male_obj3_3)
+
+
+# Calculate Mean Absolute Error (MAE)
+mae <- mean(abs(predictions_model3_m_white - test_male_obj3_3$Volume_white_normalised))
+cat("Mean Absolute Error (MAE):", mae, "\n")
+
+# Calculate Root Mean Squared Error (RMSE)
+rmse <- sqrt(mean((predictions_model3_m_white - test_male_obj3_3$Volume_white_normalised)^2))
+cat("Root Mean Squared Error (RMSE):", rmse, "\n")
+
+# Calculate AIC and BIC for the model
+model3_m_white_aic <- AIC(model3_m_white)
+model3_m_white_aic <- BIC(model3_m_white)
+
+# Print the results
+cat("AIC for the model3_m:", model3_m_white_aic, "\n")
+cat("BIC for the model3_m:", model3_m_white_aic, "\n")
+
+# Plot predictions vs actual values
+plot(test_male_obj3_3$Volume_white_normalised, predictions_model3_m_white,
+     xlab = "Actual Values", ylab = "Predicted Values", main = "Predicted vs Actual Values")
+abline(0, 1, col = "red")  # Line for perfect prediction
+```
+```{r plot_model3_m}
+par(mfrow=c(2,2))
+plot(model3_m_white)
+```
+
+## Model 4: Genetic Factors
+### Split model 4
+```{r split_model4}
+# Set seed for reproducibility
+set.seed(123)
+
+# Select relevant variables for model 4
+relevant_vars_4 <- c("Volume_white_normalised", "cluster", "age_at_diagnosis", 
+                     "Qualification_", "Townsend_deprivation_index_at_recruitment", 
+                     "Smoking_ever", "Drinking_ever", "Summed_MET_minutes_per_week_for_all_activity",
+                     "Hypertension", "Hyperlipidemia", "Insulin_medication", "Glucose_lowering_medication" , "Hypertension_medication", "Lipid_lowering_medication", "Coronary_heart_disease", "Depression", "Kidney_disease", "PRS")
+
+
+# Split the dataset into training and testing sets
+
+# Subset the female dataframe to include only the relevant variables
+female_obj3_4 <- female_obj3[, relevant_vars_4]
+
+# Remove rows with any NA values
+female_obj3_4 <- na.omit(female_obj3_4)
+
+
+# Split female data
+train_indices_f4 <- createDataPartition(female_obj3_4$Volume_white_normalised, p = 0.8, list = FALSE)
+train_female_obj3_4 <- female_obj3_4[train_indices_f4, ]
+test_female_obj3_4 <- female_obj3_4[-train_indices_f4, ]
+
+# Subset the female dataframe to include only the relevant variables
+male_obj3_4 <- male_obj3[, relevant_vars_4]
+
+# Remove rows with any NA values
+male_obj3_4 <- na.omit(male_obj3_4)
+
+# Split male data
+train_indices_m4 <- createDataPartition(male_obj3_4$Volume_white_normalised, p = 0.8, list = FALSE)
+train_male_obj3_4 <- male_obj3_4[train_indices_m4, ]
+test_male_obj3_4 <- male_obj3_4[-train_indices_m4, ]
+
+```
+
+### Model 4 female
+```{r model4_f}
+# Model 4: Health and Medication Adjustments PRS
+set.seed(5)
+# Define the model formula
+model_formula4 <- Volume_white_normalised ~ cluster + ns(age_at_diagnosis, df = 3) + Qualification_ + ns(Townsend_deprivation_index_at_recruitment, df =3) + Smoking_ever + Drinking_ever + ns(Summed_MET_minutes_per_week_for_all_activity, df=3) +
+              Hypertension + Hyperlipidemia + Insulin_medication + Glucose_lowering_medication + Hypertension_medication + Lipid_lowering_medication + Coronary_heart_disease + Depression + Kidney_disease + PRS
+
+# Adjust the baseline level for the 'cluster' variable
+train_female_obj3_4$cluster <- relevel(train_female_obj3_4$cluster, ref = "Age-related")
+
+
+# Model 3 female
+model4_f_white <- lm(model_formula4, data = train_female_obj3_4)
+summary(model4_f_white)
+
+# Make predictions on the testing data
+predictions_model4_f_white<- predict(model4_f_white, newdata = test_female_obj3_4)
+
+
+# Calculate Mean Absolute Error (MAE)
+mae <- mean(abs(predictions_model4_f_white - test_female_obj3_4$Volume_white_normalised))
+cat("Mean Absolute Error (MAE):", mae, "\n")
+
+# Calculate Root Mean Squared Error (RMSE)
+rmse <- sqrt(mean((predictions_model4_f_white - test_female_obj3_4$Volume_white_normalised)^2))
+cat("Root Mean Squared Error (RMSE):", rmse, "\n")
+
+# Calculate AIC and BIC for the model
+model4_f_white_aic <- AIC(model4_f_white)
+model4_f_white_bic <- BIC(model4_f_white)
+
+# Print the results
+cat("AIC for the model4_f_white:", model4_f_white_aic, "\n")
+cat("BIC for the model4_f_white:", model4_f_white_bic, "\n")
+
+# Plot predictions vs actual values
+plot(test_female_obj3_4$Volume_white_normalised, predictions_model4_f_white,
+     xlab = "Actual Values", ylab = "Predicted Values", main = "Predicted vs Actual Values")
+abline(0, 1, col = "red")  # Line for perfect prediction
+```
+```{r plot_model4_f}
+par(mfrow = c(2,2))
+plot(model4_f_white)
+```
+### Model 4 male
+```{r model4_m}
+# Model 4: Health and Medication Adjustments
+set.seed(5)
+
+# Adjust the baseline level for the 'cluster' variable
+train_male_obj3_4$cluster <- relevel(train_male_obj3_4$cluster, ref = "Age-related")
+
+# Model 4 male
+model4_m_white <- lm(model_formula4, data = train_male_obj3_4)
+summary(model4_m_white)
+
+# Make predictions on the testing data
+predictions_model4_m_white<- predict(model4_m_white, newdata = test_male_obj3_4)
+
+
+# Calculate Mean Absolute Error (MAE)
+mae <- mean(abs(predictions_model4_m_white - test_male_obj3_4$Volume_white_normalised))
+cat("Mean Absolute Error (MAE):", mae, "\n")
+
+# Calculate Root Mean Squared Error (RMSE)
+rmse <- sqrt(mean((predictions_model4_m_white - test_male_obj3_4$Volume_white_normalised)^2))
+cat("Root Mean Squared Error (RMSE):", rmse, "\n")
+
+# Calculate AIC and BIC for the model
+model4_m_white_aic <- AIC(model4_m_white)
+model4_m_white_bic <- BIC(model4_m_white)
+
+# Print the results
+cat("AIC for the model4_m:", model4_m_white_aic, "\n")
+cat("BIC for the model4_m:", model4_m_white_bic, "\n")
+
+# Plot predictions vs actual values
+plot(test_male_obj3_4$Volume_white_normalised, predictions_model4_m_white,
+     xlab = "Actual Values", ylab = "Predicted Values", main = "Predicted vs Actual Values")
+abline(0, 1, col = "red")  # Line for perfect prediction
+```
+```{r plot_model4_m}
+par(mfrow=c(2,2))
+plot(model4_m_white)
+```
+Linearity
+
+```{r}
+library(ggplot2)
+
+age_trans <- log(male_obj3_4$age_at_diagnosis)
+
+# Plot for Age at Diagnosis
+ggplot(male_obj3_4, aes(x = age_trans, y = Volume_white_normalised)) +
+  geom_point() +
+  geom_smooth(method = "loess", se = FALSE, color = "blue") +
+  ggtitle("Relationship between Age at Diagnosis and Volume of White Normalised") +
+  xlab("Age at Diagnosis") +
+  ylab("Volume of Grey White Normalised")
+
+# Plot for Townsend Deprivation Index
+ggplot(male_obj3_4, aes(x = Townsend_deprivation_index_at_recruitment, y = Volume_white_normalised)) +
+  geom_point() +
+  geom_smooth(method = "loess", se = FALSE, color = "red") +
+  ggtitle("Relationship between Townsend Deprivation Index and Volume of White Normalised") +
+  xlab("Townsend Deprivation Index") +
+  ylab("Volume of Grey White Normalised")
+
+# Plot for Summed MET Minutes per Week for All Activity
+ggplot(male_obj3_4, aes(x = Summed_MET_minutes_per_week_for_all_activity, y = Volume_white_normalised)) +
+  geom_point() +
+  geom_smooth(method = "loess", se = FALSE, color = "green") +
+  ggtitle("Relationship between Summed MET Minutes per Week and Volume of White Normalised") +
+  xlab("Summed MET Minutes per Week") +
+  ylab("Volume of Grey White Normalised")
+
+# Plot for PRS
+ggplot(male_obj3_4, aes(x = PRS, y = Volume_white_normalised)) +
+  geom_point() +
+  geom_smooth(method = "loess", se = FALSE, color = "purple") +
+  ggtitle("Relationship between PRS and Volume of White Normalised") +
+  xlab("PRS") +
+  ylab("Volume of White Normalised")
+
+```
+
+
+# compare model 3 and 4
+We can use the anova() function to perform an analysis of deviance that compares the difference in deviances between competing models.
+```{r anova_compare}
+anova(model2_f_white, model3_f_white ,model4_f_white, test = "Chisq")
+```
+Model3 is not significantly better
+
+
+```{r VIF}
+# Check for Multicollinearity:
+
+# VIF
+vif_values <- car::vif(model4_m_white)
+print(vif_values)
+
+vif_values <- car::vif(model4_f_white)
+print(vif_values)
+```
+Most of the VIF values are close to 1 and < 5, indicating low multicollinearity.
+
+# Forest plots females vs males
+
+```{r}
+# Define the models
+models_f_white <- list(model1_f_white, model2_f_white, model3_f_white, model4_f_white)
+models_m_white <- list(model1_m_white, model2_m_white, model3_m_white, model4_m_white)
+
+# Define the terms to filter
+terms_f <- c("clusterLipid-related", "clusterObesity-related", "(Intercept)")
+terms_m <- c("clusterLipid-related", "clusterObesity-related", "(Intercept)")
+
+# Define a function to process each model
+process_model <- function(model, terms, sex, model_label) {
+  tidy(model) %>%
+    filter(term %in% terms) %>%
+    mutate(sex = sex,
+           model = model_label,
+           term = case_when(
+             term == "(Intercept)" ~ "Age-related",
+             term == "clusterLipid-related" ~ "Lipid-related",
+             term == "clusterObesity-related" ~ "Obesity-related",
+              TRUE ~ term
+           ),
+           std.error = case_when(
+             term == "Age-related" ~ 0,
+             TRUE ~ std.error
+           ))
+}
+
+# Process female models
+coeff_combined_f <- bind_rows(
+  lapply(seq_along(models_f_white), function(i) {
+    process_model(models_f_white[[i]], terms_f, "Female", paste0("model", i))
+  })
+)
+
+# Calculate adjusted estimates
+coeff_combined_f <- coeff_combined_f %>%
+  group_by(model) %>%
+  mutate(
+    age_related_estimate = estimate[term == "Age-related"],
+    Volume = ifelse(term == "Age-related", estimate, estimate + age_related_estimate)
+  ) 
+
+# Process male models
+coeff_combined_m <- bind_rows(
+  lapply(seq_along(models_m_white), function(i) {
+    process_model(models_m_white[[i]], terms_m, "Male", paste0("model", i))
+  })
+  
+)
+# Calculate adjusted estimates
+coeff_combined_m <- coeff_combined_m %>%
+  group_by(model) %>%
+  mutate(
+    age_related_estimate = estimate[term == "Age-related"],
+    Volume = ifelse(term == "Age-related", estimate, estimate + age_related_estimate)
+  ) 
+
+
+# Process female models
+#coeff_combined_f <- bind_rows(
+ # lapply(seq_along(models_f), function(i) {
+  #  process_model(models_f[[i]], terms_f, "Female", paste0("model", i))
+  #})
+#)
+
+# Process male models
+#coeff_combined_m <- bind_rows(
+ # lapply(seq_along(models_m), function(i) {
+  #  process_model(models_m[[i]], terms_m, "Male", paste0("model", i))
+  #})
+#)
+
+# Convert to data frame if needed
+coeff_combined_f <- as.data.frame(coeff_combined_f)
+coeff_combined_m <- as.data.frame(coeff_combined_m)
+
+# Print the combined coefficients for females and males
+print(coeff_combined_f)
+print(coeff_combined_m)
+```
+
+
+```{r}
+# Create a custom label function
+format_scientific <- function(x) {
+  parse(text = gsub("e\\+*", " %*% 10^", scales::scientific_format()(x)))
+}
+
+# Create a forest plot for females
+ggplot(coeff_combined_f, aes(x = Volume, y = term, color = model, group = model)) +
+  geom_point(position = position_dodge(width = 0.5), size = 3) +
+  geom_errorbar(aes(xmin = Volume - std.error, xmax = Volume + std.error), 
+                position = position_dodge(width = 0.5), width = 0.2) +
+  theme_minimal() +
+  labs(title = "Forest Plot of Female Regression Models for Brain Volume", x = "Brain volume white matter (mm3)", y = "Type 2 Diabetes sub-phenotype") +
+  theme(legend.position = "right") +
+  scale_color_brewer(palette = "Set2") +
+  scale_x_continuous(labels = format_scientific)
+
+```
+```{r}
+# Create a forest plot for females
+ggplot(coeff_combined_m, aes(x = Volume, y = term, color = model, group = model)) +
+  geom_point(position = position_dodge(width = 0.5), size = 3) +
+  geom_errorbar(aes(xmin = Volume - std.error, xmax = Volume + std.error), 
+                position = position_dodge(width = 0.5), width = 0.2) +
+  theme_minimal() +
+  labs(title = "Forest Plot of Male Regression Models for Brain Volume", x = "Brain volume white matter (mm3)", y = "Type 2 Diabetes sub-phenotype") +
+  theme(legend.position = "right") +
+    scale_color_brewer(palette="Set2") +
+  scale_x_continuous(labels = format_scientific)
+```
+# Model comparison plot
+```{r}
+# Create a data frame
+data <- data.frame(
+  Model = c("Model1_f_white", "Model2_f_white", "Model3_f_white", "Model4_f_white"),
+  R_squared = c(0.02892, 0.3544, 0.4087, 0.4141),
+  BIC = c(2525.40, 2044.252, 2076.662, 2080.31)
+)
+
+ggplot(data, aes(x = Model)) +
+  geom_line(aes(y = R_squared, group = 1), color = "#003da6") +
+  geom_point(aes(y = R_squared), color = "#003da6") +
+  geom_line(aes(y = BIC / 10000, group = 1), color = "#C00935") + # Scaling BIC for better visualization
+  geom_point(aes(y = BIC / 10000), color = "#C00935") +
+  scale_y_continuous(
+    name = "R-squared",
+    sec.axis = sec_axis(~.*10000, name = "BIC") # Adjust the scale of the secondary axis
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 20, face = "bold"),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    axis.title.y.left = element_text(size = 14, color = "#003da6"),
+    axis.title.y.right = element_text(size = 14, color = "#C00935")
+  ) +
+  labs(title = "R-squared and BIC across Models for Females",
+       x = NULL)
+
+
+```
+
+
+```{r}
+# Create a data frame
+data <- data.frame(
+  Model = c("Model1_m_white", "Model2_m_white", "Model3_m_white", "Model4_m_white"),
+  R_squared = c(0.02577, 0.4223, 0.4893, 0.4315),
+  BIC = c(4652.717, 3670, 3696.847, 3673.362)
+)
+
+# Find the scaling factor to align BIC and R-squared values better
+scaling_factor <- 0.0001
+
+ggplot(data, aes(x = Model)) +
+  geom_line(aes(y = R_squared, group = 1), color = "#003da6") +
+  geom_point(aes(y = R_squared), color = "#003da6") +
+  geom_line(aes(y = BIC * scaling_factor, group = 1), color = "#C00935") + # Scaling BIC for better visualization
+  geom_point(aes(y = BIC * scaling_factor), color = "#C00935") +
+  scale_y_continuous(
+    name = "R-squared",
+    sec.axis = sec_axis(~ . / scaling_factor, name = "BIC") # Adjust the scale of the secondary axis
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 20, face = "bold"),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    axis.title.y.left = element_text(size = 14, color = "#003da6"),
+    axis.title.y.right = element_text(size = 14, color = "#C00935")
+  ) +
+  labs(title = "R-squared and BIC across Models for Males",
+       x = NULL)
+```
+
+
+
+
